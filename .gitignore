@@ -4,4 +4,4 @@
 **/obj/**
 **/*.user
 **/.idea/**
-**/*.DotSettings
+**/*.DotSettings*

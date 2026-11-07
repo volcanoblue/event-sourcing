@@ -3,11 +3,27 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
+
+    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Title>$(AssemblyName)</Title>
+    <Authors>William Santos</Authors>
+    <PackageId>VolcanoBlue.EventSourcing</PackageId>
+    <Description>Event sourcing library with Models and EF Core.</Description>
+    <PackageLicenseExpression>Unlicense</PackageLicenseExpression>
+    <PackageProjectUrl>https://volcano.blue</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/volcano-blue/event-sourcing</RepositoryUrl>
+    <Copyright>2026 Volcano Blue</Copyright>
+    <PackageIcon>Resources\icon.png</PackageIcon>
+    <PackageTags>event sourcing;event-sourcing;events;cqrs;charp-library</PackageTags>
+    <PackageReadmeFile>Resources\README.md</PackageReadmeFile>
+    <PackageVersion>10.0.0</PackageVersion>
+    <Company>Volcano Blue</Company>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
-    <PackageReference Include="Moonad" Version="5.5.1" />
+    <PackageReference Include="Moonad" Version="5.5.5" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
@@ -16,7 +32,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Core\VolcanoBlue.Core.csproj" />
+    <None Include="..\icon.png">
+      <Pack>True</Pack>
+      <PackagePath>Resources</PackagePath>
+      <Visible>False</Visible>
+    </None>
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>Resources</PackagePath>
+      <Visible>False</Visible>
+    </None>
+    <None Include="..\LICENSE">
+      <Pack>True</Pack>
+      <PackagePath>Resources</PackagePath>
+      <Visible>False</Visible>
+    </None>
   </ItemGroup>
 
 </Project>

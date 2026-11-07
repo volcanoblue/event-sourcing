@@ -23,7 +23,7 @@ namespace VolcanoBlue.EventSourcing.Abstractions
             ProcessEvent(@event);
         }
 
-        protected void FeedEvents(IEnumerable<IEvent> stream)
+        protected void Rehydrate(IEnumerable<IEvent> stream)
         {
             foreach (var @event in stream)
             {
