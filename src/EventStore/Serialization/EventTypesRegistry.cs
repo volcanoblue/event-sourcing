@@ -11,7 +11,7 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
     /// Architectural Role: Scans assemblies once at startup to build type cache.
     /// Provides fast O(1) type lookup during event deserialization.
     /// </summary>
-    public static class EventTypeRegistry
+    public static class EventTypesRegistry
     {
         private static readonly ConcurrentDictionary<string, Type> _types = [];
         private static bool _isInitialized = false;

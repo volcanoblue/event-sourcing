@@ -34,7 +34,7 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
 
         public static IEvent Deserialize(Event @event)
         {
-            var type = EventTypeRegistry.GetType(@event.EventType);
+            var type = EventTypesRegistry.GetType(@event.EventType);
             var deserialized = (IEvent)JsonSerializer.Deserialize(@event.Data, type, Options)!;
 
             return deserialized;

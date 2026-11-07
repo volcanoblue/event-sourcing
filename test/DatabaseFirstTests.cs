@@ -17,7 +17,7 @@ public sealed class DatabaseFirstTests : IDisposable
     private readonly string _databasePath;
     private readonly ServiceProvider _provider;
 
-    static DatabaseFirstTests() => EventTypeRegistry.Initialize(typeof(SqliteFixture).Assembly);
+    static DatabaseFirstTests() => EventTypesRegistry.Initialize(typeof(SqliteFixture).Assembly);
 
     public DatabaseFirstTests()
     {

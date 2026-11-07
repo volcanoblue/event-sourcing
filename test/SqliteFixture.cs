@@ -19,7 +19,7 @@ public sealed class SqliteFixture : IDisposable
 {
     private readonly SqliteConnection _connection;
 
-    static SqliteFixture() => EventTypeRegistry.Initialize(typeof(SqliteFixture).Assembly);
+    static SqliteFixture() => EventTypesRegistry.Initialize(typeof(SqliteFixture).Assembly);
 
     public SqliteFixture()
     {
