@@ -1,0 +1,4 @@
+<Solution>
+    <Project Path="src/VolcanoBlue.EventSourcing.csproj" />
+    <Project Path="test/VolcanoBlue.EventSourcing.Tests.csproj" />
+</Solution>
