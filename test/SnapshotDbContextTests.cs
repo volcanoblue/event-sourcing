@@ -1,5 +1,3 @@
-using VolcanoBlue.EventSourcing.EventStore;
-
 namespace VolcanoBlue.EventSourcing.Tests;
 
 public class SnapshotDbContextTests : IDisposable
@@ -9,14 +7,13 @@ public class SnapshotDbContextTests : IDisposable
     public void Dispose() => _fixture.Dispose();
 
     [Fact]
-    public async Task ById_Missing_ReturnsSnapshotNotFound()
+    public async Task ById_Missing_ReturnsNone()
     {
         using var store = _fixture.CreateSnapshotStore();
 
         var result = await store.ByIdAsync<TestSnapshot>("nope");
 
-        Assert.True(result.IsError);
-        Assert.Same(SnapshotNotFoundError.Instance, result.ErrorValue);
+        Assert.False((bool)result);
     }
 
     [Fact]
@@ -31,7 +28,7 @@ public class SnapshotDbContextTests : IDisposable
         using var reader = _fixture.CreateSnapshotStore();
         var result = await reader.ByIdAsync<TestSnapshot>("e1");
 
-        Assert.False(result.IsError);
-        Assert.Equal(new TestSnapshot(3, "state"), result.ResultValue);
+        Assert.True((bool)result);
+        Assert.Equal(new TestSnapshot(3, "state"), result.Get());
     }
 }

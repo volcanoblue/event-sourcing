@@ -19,54 +19,41 @@ namespace VolcanoBlue.EventSourcing.EventStore
     /// Supports reading full streams or from a specific event version for incremental updates.
     /// Returns immutable arrays to prevent accidental modifications to event history.
     /// </summary>
-    public sealed class EventDbContext(DbContextOptions<EventDbContext> options) : DbContext(options)
+    public sealed class EventDbContext(DbContextOptions<EventDbContext> options,
+                                       EventModelConfiguration? modelConfigAction = null) : DbContext(options)
     {
         private DbSet<Event> Events { get; set; }
 
-        public async Task<Result<ImmutableArray<IEvent>, IError>> ReadStreamAsync(string streamId, 
+        public async Task<ImmutableArray<IEvent>> ReadStreamAsync(string streamId, 
                                                                                   CancellationToken ct = default)
         {
-            try
-            {
-                var stream = Events.AsNoTracking()
-                                   .Where(e => e.StreamId == streamId)
-                                   .OrderBy(e => e.Id);
+            var stream = Events.AsNoTracking()
+                .Where(e => e.StreamId == streamId)
+                .OrderBy(e => e.Id);
 
-                var count = await stream.CountAsync(ct);
-                if(count == 0)
-                    return ImmutableArray<IEvent>.Empty;
+            var count = await stream.CountAsync(ct);
+            if(count == 0)
+                return ImmutableArray<IEvent>.Empty;
 
-                var builder = ImmutableArray.CreateBuilder<IEvent>(count);
-                builder.AddRange(stream.Select(EventSerializer.Deserialize));
-                return builder.ToImmutable();
-            }
-            catch(Exception exc)
-            {
-                return new ExceptionalError(exc);
-            }
+            var builder = ImmutableArray.CreateBuilder<IEvent>(count);
+            builder.AddRange(stream.Select(EventSerializer.Deserialize));
+            return builder.ToImmutable();
         }
 
-        public async Task<Result<ImmutableArray<IEvent>, IError>> ReadStreamFromEventIdAsync(string streamId, long eventId, 
+        public async Task<ImmutableArray<IEvent>> ReadStreamFromEventIdAsync(string streamId, long eventId, 
                                                                                              CancellationToken ct = default)
         {
-            try
-            {
-                var stream = Events.AsNoTracking()
-                                   .Where(e => e.StreamId == streamId && e.Id > eventId)
-                                   .OrderBy(e => e.Id);
+            var stream = Events.AsNoTracking()
+                .Where(e => e.StreamId == streamId && e.Id > eventId)
+                .OrderBy(e => e.Id);
 
-                var count = await stream.CountAsync(ct);
-                if(count == 0)
-                    return ImmutableArray<IEvent>.Empty;
+            var count = await stream.CountAsync(ct);
+            if(count == 0)
+                return ImmutableArray<IEvent>.Empty;
 
-                var builder = ImmutableArray.CreateBuilder<IEvent>(count);
-                builder.AddRange(stream.Select(EventSerializer.Deserialize));
-                return builder.ToImmutable();
-            }
-            catch(Exception exc)
-            {
-                return new ExceptionalError(exc);
-            }
+            var builder = ImmutableArray.CreateBuilder<IEvent>(count);
+            builder.AddRange(stream.Select(EventSerializer.Deserialize));
+            return builder.ToImmutable();
         }
 
         public async Task AppendToStreamAsync(string streamId, IEnumerable<IEvent> events, CancellationToken ct = default)
@@ -75,22 +62,15 @@ namespace VolcanoBlue.EventSourcing.EventStore
             await Events.AddRangeAsync(eventsToAppend, ct);
         }
 
-        public async Task<Result<int, IError>> SaveStreamAsync(CancellationToken ct = default)
-        {
-            try
-            {
-                return await SaveChangesAsync(ct);
-            }
-            catch(Exception exc)
-            {
-                return await Task.FromResult(new ExceptionalError(exc));
-            }
-        }
+        public async Task<int> SaveStreamAsync(CancellationToken ct = default) =>
+            await SaveChangesAsync(ct);
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Event>().HasKey(e => new { e.Id, e.StreamId });
             base.OnModelCreating(modelBuilder);
+
+            modelConfigAction?.Invoke(modelBuilder);
         }
     }
 }

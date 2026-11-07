@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace VolcanoBlue.EventSourcing.Tests;
 
 public class EventDbContextTests : IDisposable
@@ -13,8 +15,7 @@ public class EventDbContextTests : IDisposable
 
         var result = await store.ReadStreamAsync("Missing-1");
 
-        Assert.False(result.IsError);
-        Assert.Empty(result.ResultValue);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -23,14 +24,13 @@ public class EventDbContextTests : IDisposable
         using (var writer = _fixture.CreateEventStore())
         {
             await writer.AppendToStreamAsync("Test-1", [new TestEvent(2, "second"), new TestEvent(1, "first")]);
-            Assert.False((await writer.SaveStreamAsync()).IsError);
+            Assert.Equal(2, await writer.SaveStreamAsync());
         }
 
         using var reader = _fixture.CreateEventStore();
         var result = await reader.ReadStreamAsync("Test-1");
 
-        Assert.False(result.IsError);
-        var events = result.ResultValue.Cast<TestEvent>().ToArray();
+        var events = result.Cast<TestEvent>().ToArray();
         Assert.Equal(["first", "second"], events.Select(e => e.Name));
     }
 
@@ -47,7 +47,7 @@ public class EventDbContextTests : IDisposable
         using var reader = _fixture.CreateEventStore();
         var result = await reader.ReadStreamAsync("Test-B");
 
-        var single = Assert.Single(result.ResultValue);
+        var single = Assert.Single(result);
         Assert.Equal("b", ((TestEvent)single).Name);
     }
 
@@ -63,11 +63,11 @@ public class EventDbContextTests : IDisposable
         using var reader = _fixture.CreateEventStore();
         var result = await reader.ReadStreamFromEventIdAsync("Test-1", 1);
 
-        Assert.Equal([2L, 3L], result.ResultValue.Select(e => e.EventId));
+        Assert.Equal([2L, 3L], result.Select(e => e.EventId));
     }
 
     [Fact]
-    public async Task Save_DuplicateEventId_ReturnsError()
+    public async Task Save_DuplicateEventId_Throws()
     {
         using (var writer = _fixture.CreateEventStore())
         {
@@ -77,8 +77,7 @@ public class EventDbContextTests : IDisposable
 
         using var second = _fixture.CreateEventStore();
         await second.AppendToStreamAsync("Test-1", [new TestEvent(1, "dup")]);
-        var result = await second.SaveStreamAsync();
 
-        Assert.True(result.IsError);
+        await Assert.ThrowsAsync<DbUpdateException>(() => second.SaveStreamAsync());
     }
 }

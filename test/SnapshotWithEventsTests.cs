@@ -25,7 +25,7 @@ public class SnapshotWithEventsTests : IDisposable
     {
         using var store = _fixture.CreateEventStore();
         await store.AppendToStreamAsync(StreamId, events);
-        Assert.False((await store.SaveStreamAsync()).IsError);
+        await store.SaveStreamAsync();
     }
 
     private async Task SnapshotAsync(TestSnapshot snapshot)
@@ -42,15 +42,14 @@ public class SnapshotWithEventsTests : IDisposable
         using (var snapshots = _fixture.CreateSnapshotStore())
         {
             var snapshot = await snapshots.ByIdAsync<TestSnapshot>(EntityId);
-            if (!snapshot.IsError)
-                state = snapshot.ResultValue;
+            if (snapshot)
+                state = snapshot.Get();
         }
 
         using var events = _fixture.CreateEventStore();
         var result = await events.ReadStreamFromEventIdAsync(StreamId, state.EntityVersion);
-        Assert.False(result.IsError);
 
-        var replayed = result.ResultValue;
+        var replayed = result;
         foreach (var e in replayed)
             state = new TestSnapshot((int)e.EventId, Apply(state.State, e));
 
@@ -75,7 +74,7 @@ public class SnapshotWithEventsTests : IDisposable
         using (var store = _fixture.CreateEventStore())
         {
             var all = await store.ReadStreamAsync(StreamId);
-            Assert.Equal(20, all.ResultValue.Length);
+            Assert.Equal(20, all.Length);
         }
 
         // ...but rebuilding replays only the 10 events newer than the snapshot.
@@ -96,7 +95,7 @@ public class SnapshotWithEventsTests : IDisposable
         var (fromSnapshot, _) = await RebuildAsync();
 
         using var store = _fixture.CreateEventStore();
-        var full = (await store.ReadStreamAsync(StreamId)).ResultValue;
+        var full = await store.ReadStreamAsync(StreamId);
         var fromScratch = full.Aggregate("", Apply);
 
         Assert.Equal(fromScratch, fromSnapshot.State);

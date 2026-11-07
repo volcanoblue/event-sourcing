@@ -1,15 +1,14 @@
 ﻿namespace VolcanoBlue.EventSourcing.EventStore
 {
     /// <summary>
-    /// [INFRASTRUCTURE - PERSISTENCE MODEL] Internal record for storing entity snapshots.
+    /// [INFRASTRUCTURE - PERSISTENCE MODEL] Record for storing entity snapshots.
     /// Architectural Role: Represents the physical storage structure of snapshots in database.
     /// Snapshots are optimization technique to avoid replaying all events for long-lived aggregates.
     /// EntityId: Identifies which aggregate this snapshot belongs to.
     /// EntityVersion: Event version number at which this snapshot was taken.
     /// Created: Timestamp when snapshot was created (UTC).
     /// Data: JSON-serialized snapshot state.
-    /// Internal visibility prevents direct access from outside EventSourcing infrastructure.
-    /// Currently not actively used but provides foundation for snapshot optimization.
+    /// Public so consumers can map it onto an existing schema via the model configuration callback of SnapshotDbContext.
     /// </summary>
-    internal record Snapshot(string EntityId, long EntityVersion, string Created, string Data);
+    public record Snapshot(string EntityId, long EntityVersion, string Created, string Data);
 }

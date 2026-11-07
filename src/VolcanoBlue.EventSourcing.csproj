@@ -17,14 +17,13 @@
     <PackageIcon>Resources\icon.png</PackageIcon>
     <PackageTags>event sourcing;event-sourcing;events;cqrs;charp-library</PackageTags>
     <PackageReadmeFile>Resources\README.md</PackageReadmeFile>
-    <PackageVersion>10.0.0</PackageVersion>
+    <PackageVersion>1.0.0</PackageVersion>
     <Company>Volcano Blue</Company>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
     <PackageReference Include="Moonad" Version="5.5.5" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
   <ItemGroup>

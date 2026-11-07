@@ -4,6 +4,8 @@
         <File Path="LICENSE" />
         <File Path="README.md" />
     </Folder>
-    <Project Path="src/VolcanoBlue.EventSourcing.csproj" />
+    <Project Path="src/VolcanoBlue.EventSourcing.csproj">
+        <BuildType Project="Release" />
+    </Project>
     <Project Path="test/VolcanoBlue.EventSourcing.Tests.csproj" />
 </Solution>

@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace VolcanoBlue.EventSourcing.Tests;
 
 public class TestEntityTests : IDisposable
@@ -10,15 +12,14 @@ public class TestEntityTests : IDisposable
     {
         using var store = _fixture.CreateEventStore();
         var result = await store.ReadStreamAsync($"Test-{id}");
-        Assert.False(result.IsError);
-        return TestEntity.Rehydrate(id, result.ResultValue);
+        return TestEntity.Rehydrate(id, result);
     }
 
     private async Task SaveAsync(TestEntity entity)
     {
         using var store = _fixture.CreateEventStore();
         await store.AppendToStreamAsync(entity.StreamId, entity.UncommittedEvents);
-        Assert.False((await store.SaveStreamAsync()).IsError);
+        await store.SaveStreamAsync();
         entity.CommitEvents();
     }
 
@@ -103,9 +104,8 @@ public class TestEntityTests : IDisposable
 
         using var store = _fixture.CreateEventStore();
         await store.AppendToStreamAsync(second.StreamId, second.UncommittedEvents);
-        var result = await store.SaveStreamAsync();
 
-        Assert.True(result.IsError);
+        await Assert.ThrowsAsync<DbUpdateException>(() => store.SaveStreamAsync());
         Assert.Equal(["a", "from-first"], (await LoadAsync("1")).History);
     }
 }
