@@ -3,7 +3,7 @@
 All notable changes to `VolcanoBlue.EventSourcing` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [5.0.0] - 2026-11-08
+## [10.0.0] - 2026-11-08
 
 ### Removed
 - **Breaking:** `EventSourcingOptions.TypeInfoResolver` and source-generated serialization. Events and snapshots are always serialized through reflection. `[JsonInclude]`/`[JsonConstructor]` annotations and a `JsonSerializerContext` are no longer needed (nor used).

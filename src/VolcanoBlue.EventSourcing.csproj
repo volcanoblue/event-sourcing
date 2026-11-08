@@ -17,7 +17,7 @@
     <PackageIcon>Resources\icon.png</PackageIcon>
     <PackageTags>event sourcing;event-sourcing;events;cqrs;csharp-library</PackageTags>
     <PackageReadmeFile>Resources\README.md</PackageReadmeFile>
-    <PackageVersion>5.0.0</PackageVersion>
+    <PackageVersion>10.0.0</PackageVersion>
     <Company>Volcano Blue</Company>
   </PropertyGroup>
 
