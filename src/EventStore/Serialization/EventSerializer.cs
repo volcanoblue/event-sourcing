@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using VolcanoBlue.EventSourcing.Abstractions;
 
@@ -11,7 +10,6 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
     /// </summary>
     internal static class EventSerializer
     {
-        private static readonly Dictionary<string, Type> TypesCache = [];
         private static readonly JsonSerializerOptions Options = new()
         {
             IncludeFields = true,

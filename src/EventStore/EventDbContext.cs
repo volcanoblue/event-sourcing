@@ -27,33 +27,23 @@ namespace VolcanoBlue.EventSourcing.EventStore
         public async Task<ImmutableArray<IEvent>> ReadStreamAsync(string streamId, 
                                                                                   CancellationToken ct = default)
         {
-            var stream = Events.AsNoTracking()
+            var rows = await Events.AsNoTracking()
                 .Where(e => e.StreamId == streamId)
-                .OrderBy(e => e.Id);
+                .OrderBy(e => e.Id)
+                .ToListAsync(ct);
 
-            var count = await stream.CountAsync(ct);
-            if(count == 0)
-                return ImmutableArray<IEvent>.Empty;
-
-            var builder = ImmutableArray.CreateBuilder<IEvent>(count);
-            builder.AddRange(stream.Select(EventSerializer.Deserialize));
-            return builder.ToImmutable();
+            return Deserialize(rows);
         }
 
         public async Task<ImmutableArray<IEvent>> ReadStreamFromEventIdAsync(string streamId, long eventId, 
                                                                                              CancellationToken ct = default)
         {
-            var stream = Events.AsNoTracking()
+            var rows = await Events.AsNoTracking()
                 .Where(e => e.StreamId == streamId && e.Id > eventId)
-                .OrderBy(e => e.Id);
+                .OrderBy(e => e.Id)
+                .ToListAsync(ct);
 
-            var count = await stream.CountAsync(ct);
-            if(count == 0)
-                return ImmutableArray<IEvent>.Empty;
-
-            var builder = ImmutableArray.CreateBuilder<IEvent>(count);
-            builder.AddRange(stream.Select(EventSerializer.Deserialize));
-            return builder.ToImmutable();
+            return Deserialize(rows);
         }
 
         public async Task AppendToStreamAsync(string streamId, IEnumerable<IEvent> events, CancellationToken ct = default)
@@ -62,8 +52,23 @@ namespace VolcanoBlue.EventSourcing.EventStore
             await Events.AddRangeAsync(eventsToAppend, ct);
         }
 
-        public async Task<int> SaveStreamAsync(CancellationToken ct = default) =>
-            await SaveChangesAsync(ct);
+        public async Task<int> SaveStreamAsync(CancellationToken ct = default)
+        {
+            var saved = await SaveChangesAsync(ct);
+            ChangeTracker.Clear(); // appended rows are never read back through this context
+            return saved;
+        }
+
+        private static ImmutableArray<IEvent> Deserialize(List<Event> rows)
+        {
+            if (rows.Count == 0)
+                return ImmutableArray<IEvent>.Empty;
+
+            var builder = ImmutableArray.CreateBuilder<IEvent>(rows.Count);
+            foreach (var row in rows)
+                builder.Add(EventSerializer.Deserialize(row));
+            return builder.ToImmutable();
+        }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

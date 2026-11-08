@@ -24,7 +24,7 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 | `ISnapshotable<T>` | `Abstractions` | Optional contract for entities that decide when and how to create a snapshot. |
 | `EventDbContext` | `EventStore` | Append-only event store (read streams, append, save). |
 | `SnapshotDbContext` | `EventStore` | Snapshot store (get by id, upsert). |
-| `EventTypeRegistry` | `EventStore.Serialization` | Maps stored type names to CLR event types for deserialization. |
+| `EventTypesRegistry` | `EventStore.Serialization` | Maps stored type names to CLR event types for deserialization. |
 
 ### Versioning
 
@@ -86,10 +86,10 @@ public sealed class Customer : EventSourcedEntity
 
 ### 3. Register event types and the stores
 
-Event types are resolved by full name when reading. Call `EventTypeRegistry.Initialize` once at startup with every assembly containing events (later calls are ignored).
+Event types are resolved by full name when reading. Call `EventTypesRegistry.Initialize` once at startup with every assembly containing events (later calls are ignored).
 
 ```csharp
-EventTypeRegistry.Initialize(typeof(NameChanged).Assembly);
+EventTypesRegistry.Initialize(typeof(NameChanged).Assembly);
 
 services.AddDbContext<EventDbContext>(o => o.UseSqlite("Data Source=events.db"));
 services.AddDbContext<SnapshotDbContext>(o => o.UseSqlite("Data Source=events.db"));
@@ -158,7 +158,7 @@ Implement `ISnapshotable<TSnapshot>` (`ShouldTakeSnapshot()` / `TakeSnapshot()`)
 
 - Events are serialized with `System.Text.Json`; fields are included and property names are case-insensitive on read.
 - Types with private constructors can be deserialized (internal `PrivateConstructorConverter`), keeping domain types free of serialization concerns.
-- Event types must be concrete classes/records implementing `IEvent`, and their assembly must be passed to `EventTypeRegistry.Initialize`; otherwise reading throws `InvalidOperationException` ("Event type ... not found").
+- Event types must be concrete classes/records implementing `IEvent`, and their assembly must be passed to `EventTypesRegistry.Initialize`; otherwise reading throws `InvalidOperationException` ("Event type ... not found").
 - The full type name is stored, so renaming or moving an event type breaks reading existing events.
 
 ## Database setup
@@ -208,7 +208,7 @@ using Microsoft.EntityFrameworkCore;
 using VolcanoBlue.EventSourcing.EventStore;
 using VolcanoBlue.EventSourcing.EventStore.Serialization;
 
-EventTypeRegistry.Initialize(typeof(NameChanged).Assembly);
+EventTypesRegistry.Initialize(typeof(NameChanged).Assembly);
 
 // The mapping callbacks are picked up by the contexts' constructors.
 services.AddSingleton<EventModelConfiguration>(modelBuilder =>
@@ -263,7 +263,7 @@ Notes:
 src/
   Abstractions/             IEvent, EventSourcedEntity, ISnapshot, ISnapshotable<T>
   EventStore/               EventDbContext, SnapshotDbContext, errors, persistence records
-  EventStore/Serialization/ EventSerializer, SnapshotSerializer, EventTypeRegistry, PrivateConstructorConverter
+  EventStore/Serialization/ EventSerializer, SnapshotSerializer, EventTypesRegistry, PrivateConstructorConverter
 test/                       xUnit tests using in-memory SQLite
 ```
 

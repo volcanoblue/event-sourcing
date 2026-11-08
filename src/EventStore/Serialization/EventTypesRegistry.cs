@@ -14,26 +14,28 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
     public static class EventTypesRegistry
     {
         private static readonly ConcurrentDictionary<string, Type> _types = [];
-        private static bool _isInitialized = false;
+        private static readonly object InitLock = new();
+        private static volatile bool _isInitialized;
 
         public static void Initialize(params Assembly[] assemblies)
         {
             if (_isInitialized)
                 return;
 
-            var eventTypes = assemblies
-                .SelectMany(a => a.GetTypes())
-                .Where(t => typeof(IEvent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
-
-            foreach (var type in eventTypes)
+            lock (InitLock)
             {
-                if (!_types.ContainsKey(type.FullName!))
-                {
-                    _types[type.FullName!] = type;
-                }
-            }
+                if (_isInitialized)
+                    return;
 
-            _isInitialized = true;
+                var eventTypes = assemblies
+                    .SelectMany(a => a.GetTypes())
+                    .Where(t => typeof(IEvent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
+
+                foreach (var type in eventTypes)
+                    _types.TryAdd(type.FullName!, type);
+
+                _isInitialized = true;
+            }
         }
 
         public static Type GetType(string typeName)
@@ -42,7 +44,7 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
                 return type;
 
             throw new InvalidOperationException(
-                $"Event type '{typeName}' not found. Ensure EventTypeRegistry.Initialize() is called with correct assemblies.");
+                $"Event type '{typeName}' not found. Ensure EventTypesRegistry.Initialize() is called with correct assemblies.");
         }
     }
 }
