@@ -1,16 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
-using System.Text.Json.Serialization.Metadata;
 using VolcanoBlue.EventSourcing.Abstractions;
 using VolcanoBlue.EventSourcing.Serialization;
 
 namespace VolcanoBlue.EventSourcing;
 
 /// <summary>
-/// Configuration shared by every <see cref="EventStore"/>: which event types exist, how they are serialized and the
+/// Configuration shared by every <see cref="EventStore"/>: which event types exist and the
 /// clock. Build it once at startup (<c>AddEventSourcing</c> registers it as a singleton). After the first
 /// <see cref="EventStore"/> uses it, it is frozen and further changes throw.
 /// </summary>
@@ -18,22 +16,8 @@ public sealed class EventSourcingOptions
 {
     private readonly object _lock = new();
     private readonly List<Type> _eventTypes = [];
-    private IJsonTypeInfoResolver? _typeInfoResolver;
     private TimeProvider _timeProvider = TimeProvider.System;
     private SerializationRuntime? _runtime;
-
-    /// <summary>
-    /// Metadata for the events and the snapshotted entities, normally a source-generated
-    /// <c>JsonSerializerContext</c> (<c>MyContext.Default</c>). Required for Native AOT and trimming.
-    /// When set, snapshots are serialized by System.Text.Json like any other object (annotate private state with
-    /// <c>[JsonInclude]</c> and a private constructor with <c>[JsonConstructor]</c>). When null, reflection is used:
-    /// events may have private constructors and entities are snapshotted by their fields.
-    /// </summary>
-    public IJsonTypeInfoResolver? TypeInfoResolver
-    {
-        get => _typeInfoResolver;
-        set => Configure(() => _typeInfoResolver = value);
-    }
 
     /// <summary>Clock used for <c>OccurredAt</c> and <c>Created</c>; <see cref="TimeProvider.System"/> by default.</summary>
     public TimeProvider TimeProvider
@@ -42,7 +26,7 @@ public sealed class EventSourcingOptions
         set => Configure(() => _timeProvider = value ?? throw new ArgumentNullException(nameof(value)));
     }
 
-    /// <summary>Registers an event type. Trimming and AOT friendly, unlike <see cref="AddEventsFrom"/>.</summary>
+    /// <summary>Registers an event type.</summary>
     public EventSourcingOptions AddEvent<TEvent>() where TEvent : IEvent => AddEvent(typeof(TEvent));
 
     /// <summary>Registers an event type, which must implement <see cref="IEvent"/>.</summary>
@@ -57,7 +41,6 @@ public sealed class EventSourcingOptions
     }
 
     /// <summary>Registers every concrete <see cref="IEvent"/> found in <paramref name="assemblies"/>.</summary>
-    [RequiresUnreferencedCode("Scans assemblies for event types; register them with AddEvent<T>() when trimming.")]
     public EventSourcingOptions AddEventsFrom(params Assembly[] assemblies)
     {
         foreach (var assembly in assemblies)
@@ -78,7 +61,7 @@ public sealed class EventSourcingOptions
         get
         {
             lock (_lock)
-                return _runtime ??= new SerializationRuntime(_eventTypes, _typeInfoResolver, _timeProvider);
+                return _runtime ??= new SerializationRuntime(_eventTypes, _timeProvider);
         }
     }
 
@@ -93,7 +76,6 @@ public sealed class EventSourcingOptions
         }
     }
 
-    [RequiresUnreferencedCode("Scans assemblies for event types.")]
     private static Type[] LoadableTypes(Assembly assembly)
     {
         try

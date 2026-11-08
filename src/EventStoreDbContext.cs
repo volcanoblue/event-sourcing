@@ -1,6 +1,4 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,9 +21,6 @@ public sealed class EventStoreDbContext : DbContext
 {
     private readonly EventStoreModelConfiguration? _modelConfiguration;
 
-    // EF Core itself is not trimming/AOT compatible (its own DbContext constructor says so); the library only passes that on.
-    [RequiresUnreferencedCode("EF Core isn't fully compatible with trimming, and running the application may generate unexpected runtime failures.")]
-    [RequiresDynamicCode("EF Core isn't fully compatible with NativeAOT, and running the application may generate unexpected runtime failures.")]
     public EventStoreDbContext(DbContextOptions<EventStoreDbContext> options,
                                EventStoreModelConfiguration? modelConfiguration = null) : base(options)
     {

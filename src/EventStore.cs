@@ -26,9 +26,7 @@ public sealed class EventStore(EventStoreDbContext db, EventSourcingOptions opti
     /// cannot be read back (<see cref="JsonException"/>, e.g. after refactoring the entity) is ignored and the whole
     /// stream is replayed: the events are the source of truth.
     /// </summary>
-    public async Task<T?> LoadAsync<
-        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>(
-        string streamId, CancellationToken ct = default)
+    public async Task<T?> LoadAsync<T>(string streamId, CancellationToken ct = default)
         where T : EventSourcedEntity
     {
         T? entity = null;

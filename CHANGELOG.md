@@ -3,6 +3,18 @@
 All notable changes to `VolcanoBlue.EventSourcing` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [5.0.0] - 2026-11-08
+
+### Removed
+- **Breaking:** `EventSourcingOptions.TypeInfoResolver` and source-generated serialization. Events and snapshots are always serialized through reflection. `[JsonInclude]`/`[JsonConstructor]` annotations and a `JsonSerializerContext` are no longer needed (nor used).
+- **Breaking:** trimming and Native AOT support. The library is reflection based by design: the trim/AOT analyzers and every `[RequiresUnreferencedCode]`, `[RequiresDynamicCode]` and `[DynamicallyAccessedMembers]` annotation were removed, and the entity factory always compiles the constructor.
+
+### Changed
+- Computed properties (`Name => _name`) have no field, so they are never persisted and need no `[JsonIgnore]`. `[JsonIgnore]` is only for excluding an auto-property; `[NonSerialized]` for a field.
+
+### Performance
+- Event constructor arguments and snapshot fields are read straight from `Utf8JsonReader` (no `JsonDocument`, no re-parsing of each value), and the `JsonTypeInfo` of each snapshot field is cached.
+
 ## [4.0.0] - 2026-11-08
 
 ### Added

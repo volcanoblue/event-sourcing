@@ -28,7 +28,6 @@ public sealed class DatabaseFixture : IDisposable
 
     private readonly string _name = $"es_{Guid.NewGuid():N}";
 
-    // Events are registered one by one, the way a trimmed or AOT application has to.
     public static readonly EventSourcingOptions Options = new EventSourcingOptions()
         .AddEvent<TestEvent>()
         .AddEvent<FieldEvent>()

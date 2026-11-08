@@ -4,10 +4,10 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Diagnostics.CodeAnalysis;
 using System.Reflection.Emit;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using VolcanoBlue.EventSourcing.Abstractions;
 
 namespace VolcanoBlue.EventSourcing.Serialization;
@@ -19,24 +19,21 @@ namespace VolcanoBlue.EventSourcing.Serialization;
 /// Honors <see cref="JsonIgnoreAttribute"/> on a property (for its backing field) and <see cref="NonSerializedAttribute"/>.
 /// Auto-property backing fields are written under the property name.
 /// </summary>
-[RequiresUnreferencedCode("Reads and writes entity fields through reflection.")]
-[RequiresDynamicCode("Emits accessors for the entity fields.")]
 internal static class EntityStateSerializer
 {
-    private const string JustReflection = "Only reachable through EntityStateSerializer, which requires unreferenced and dynamic code.";
-
     private static readonly ConcurrentDictionary<Type, TypeState> Cache = [];
 
     // Same conventions as events. Reading gets the private-constructor converter; writing must not
     // (its Write re-enters the serializer with the same options).
     private static readonly JsonSerializerOptions ReadOptions = new()
     {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         IncludeFields = true,
         PropertyNameCaseInsensitive = true,
         Converters = { new PrivateConstructorConverter() }
     };
 
-    private static readonly JsonSerializerOptions WriteOptions = new() { IncludeFields = true };
+    private static readonly JsonSerializerOptions WriteOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver(), IncludeFields = true };
 
     public static bool Handles(Type type) => typeof(EventSourcedEntity).IsAssignableFrom(type);
 
@@ -49,8 +46,8 @@ internal static class EntityStateSerializer
             writer.WriteStartObject();
             foreach (var field in state.Fields)
             {
-                writer.WritePropertyName(field.Name);
-                JsonSerializer.Serialize(writer, field.Get(entity), field.Type, WriteOptions);
+                writer.WritePropertyName(field.EncodedName);
+                JsonSerializer.Serialize(writer, field.Get(entity), field.WriteInfo ??= WriteOptions.GetTypeInfo(field.Type));
             }
             writer.WriteEndObject();
         }
@@ -63,11 +60,21 @@ internal static class EntityStateSerializer
         var state = Cache.GetOrAdd(typeof(T), static t => new TypeState(t));
         var entity = state.Create();
 
-        using var doc = JsonDocument.Parse(json);
-        foreach (var field in state.Fields)
+        // Fields are read straight from the reader: no intermediate JsonDocument, no re-parsing.
+        var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(json));
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("A snapshot must be a JSON object.");
+
+        // Fields are written in declaration order, so the next property is almost always the next field.
+        var next = 0;
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
         {
-            if (doc.RootElement.TryGetProperty(field.Name, out var value))
-                field.Set(entity, value.Deserialize(field.Type, ReadOptions));
+            var field = state.Find(ref reader, ref next);
+            reader.Read();
+            if (field is null)
+                reader.Skip();
+            else
+                field.Set(entity, JsonSerializer.Deserialize(ref reader, field.ReadInfo ??= ReadOptions.GetTypeInfo(field.Type)));
         }
 
         ((EventSourcedEntity)entity).RestoreVersion(entityVersion);
@@ -76,11 +83,13 @@ internal static class EntityStateSerializer
 
     // Accessors are emitted once per field; unlike FieldInfo.SetValue they cost a plain delegate call,
     // and unlike expression trees they can assign readonly fields.
-    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = JustReflection)]
-    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = JustReflection)]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = JustReflection)]
     private sealed record StateField(string Name, Type Type, Func<object, object?> Get, Action<object, object?> Set)
     {
+        public JsonEncodedText EncodedName { get; } = JsonEncodedText.Encode(Name);
+        public byte[] Utf8Name { get; } = System.Text.Encoding.UTF8.GetBytes(Name);
+        public JsonTypeInfo? ReadInfo;
+        public JsonTypeInfo? WriteInfo;
+
         public static StateField Create(string name, FieldInfo info)
         {
             var owner = info.DeclaringType!;
@@ -109,13 +118,25 @@ internal static class EntityStateSerializer
         }
     }
 
-    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = JustReflection)]
-    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = JustReflection)]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = JustReflection)]
     private sealed class TypeState
     {
         public readonly StateField[] Fields;
         public readonly Func<object> Create;
+
+        public StateField? Find(ref Utf8JsonReader reader, ref int next)
+        {
+            for (var n = 0; n < Fields.Length; n++)
+            {
+                var i = (next + n) % Fields.Length;
+                if (reader.ValueTextEquals(Fields[i].Utf8Name))
+                {
+                    next = i + 1;
+                    return Fields[i];
+                }
+            }
+
+            return null;
+        }
 
         public TypeState(Type type)
         {

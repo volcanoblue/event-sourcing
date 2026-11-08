@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -14,11 +14,6 @@ namespace VolcanoBlue.EventSourcing.Serialization
     /// Architectural Role: Enables deserialization of domain value objects by invoking private constructors via reflection.
     /// Preserves domain model purity by keeping serialization concerns in infrastructure layer.
     /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Only added to the options when reflection is enabled.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2067", Justification = "Only added to the options when reflection is enabled.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Only added to the options when reflection is enabled.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2090", Justification = "Only added to the options when reflection is enabled.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Only added to the options when dynamic code is supported.")]
     internal sealed class PrivateConstructorConverter : JsonConverterFactory
     {
         private static readonly ConcurrentDictionary<Type, bool> CanConvertCache = [];
@@ -51,9 +46,10 @@ namespace VolcanoBlue.EventSourcing.Serialization
         {
             private static readonly ConstructorInfo? Constructor;
             private static readonly ParameterInfo[]? Parameters;
-            private static readonly PropertyNameMapping[]? PropertyMappings;
             private static readonly Func<object?[], T>? CompiledConstructor;
             private static readonly int ParameterCount;
+            private static readonly object?[]? Defaults;
+            private static readonly Dictionary<string, int>? IndexByName;
 
             static PrivateConstructorConverterInner()
             {
@@ -67,15 +63,16 @@ namespace VolcanoBlue.EventSourcing.Serialization
                 {
                     Parameters = Constructor.GetParameters();
                     ParameterCount = Parameters.Length;
-                    PropertyMappings = new PropertyNameMapping[ParameterCount];
+                    Defaults = new object?[ParameterCount];
+                    IndexByName = new Dictionary<string, int>(ParameterCount, StringComparer.OrdinalIgnoreCase);
 
                     for (int i = 0; i < ParameterCount; i++)
                     {
                         var paramName = Parameters[i].Name!;
-                        PropertyMappings[i] = new PropertyNameMapping(
-                            paramName,
-                            paramName.Length > 0 ? char.ToUpperInvariant(paramName[0]) + paramName[1..] : paramName
-                        );
+                        Defaults[i] = Parameters[i].HasDefaultValue
+                            ? Parameters[i].DefaultValue
+                            : GetDefaultValue(Parameters[i].ParameterType);
+                        IndexByName.TryAdd(paramName, i);
                     }
 
                     // Compile expression tree for fast constructor invocation
@@ -141,7 +138,7 @@ namespace VolcanoBlue.EventSourcing.Serialization
                 if (reader.TokenType == JsonTokenType.Null)
                     return default;
 
-                if (Constructor is null || Parameters is null || PropertyMappings is null || CompiledConstructor is null)
+                if (Constructor is null || Parameters is null || CompiledConstructor is null)
                     return default;
 
                 // Handle parameterless constructor
@@ -150,37 +147,32 @@ namespace VolcanoBlue.EventSourcing.Serialization
                     return CompiledConstructor([]);
                 }
 
-                using var doc = JsonDocument.ParseValue(ref reader);
-                var root = doc.RootElement;
+                if (reader.TokenType != JsonTokenType.StartObject)
+                    throw new JsonException($"Expected a JSON object to build {typeof(T).Name}.");
 
-                // Constructor arguments are small, so a plain array is cheaper than renting from a pool
-                var parameterValues = new object?[ParameterCount];
+                // Defaults are pre-boxed once; properties found in the JSON overwrite them.
+                var parameterValues = (object?[])Defaults!.Clone();
 
+                // Properties are read straight from the reader: no intermediate JsonDocument, no re-parsing.
+                while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
                 {
-                    // Match JSON properties to constructor parameters
-                    for (int i = 0; i < ParameterCount; i++)
-                    {
-                        var param = Parameters[i];
-                        var mapping = PropertyMappings[i];
-
-                        // Try to find matching property in JSON (case-insensitive)
-                        if (root.TryGetProperty(mapping.LowerCase, out var jsonValue) ||
-                            root.TryGetProperty(mapping.UpperCase, out jsonValue))
-                        {
-                            parameterValues[i] = jsonValue.Deserialize(param.ParameterType, options);
-                        }
-                        else
-                        {
-                            // Use default value if property not found
-                            parameterValues[i] = param.HasDefaultValue
-                                ? param.DefaultValue
-                                : GetDefaultValue(param.ParameterType);
-                        }
-                    }
-
-                    // Invoke compiled constructor delegate
-                    return CompiledConstructor(parameterValues);
+                    var index = IndexOf(ref reader);
+                    reader.Read();
+                    if (index < 0)
+                        reader.Skip();
+                    else
+                        parameterValues[index] = JsonSerializer.Deserialize(ref reader, Parameters[index].ParameterType, options);
                 }
+
+                return CompiledConstructor(parameterValues);
+            }
+
+            private static int IndexOf(ref Utf8JsonReader reader)
+            {
+                var length = reader.HasValueSequence ? checked((int)reader.ValueSequence.Length) : reader.ValueSpan.Length;
+                Span<char> name = length <= 256 ? stackalloc char[256] : new char[length];
+                var written = reader.CopyString(name);
+                return IndexByName!.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(name[..written], out var index) ? index : -1;
             }
 
             private static object? GetDefaultValue(Type type)
@@ -202,8 +194,6 @@ namespace VolcanoBlue.EventSourcing.Serialization
             {
                 JsonSerializer.Serialize(writer, value, value!.GetType(), options);
             }
-
-            private readonly record struct PropertyNameMapping(string LowerCase, string UpperCase);
         }
     }
 }

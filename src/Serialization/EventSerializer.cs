@@ -5,7 +5,6 @@ namespace VolcanoBlue.EventSourcing.Serialization;
 
 /// <summary>
 /// [INFRASTRUCTURE - SERIALIZATION] Converts between domain event objects and their stored rows.
-/// Uses <see cref="JsonTypeInfo"/> lookups only, so it works with source-generated metadata (Native AOT).
 /// </summary>
 internal sealed class EventSerializer(EventTypeRegistry registry, JsonSerializerOptions readOptions, JsonSerializerOptions writeOptions)
 {
@@ -16,12 +15,12 @@ internal sealed class EventSerializer(EventTypeRegistry registry, JsonSerializer
                          streamId,
                          occurredAt,
                          registry.NameOf(type),
-                         JsonSerializer.Serialize(@event, writeOptions.GetTypeInfo(type)));
+                         JsonSerializer.Serialize(@event, type, writeOptions));
     }
 
     public IEvent Deserialize(Event row)
     {
         var type = registry.GetType(row.EventType);
-        return (IEvent)JsonSerializer.Deserialize(row.Data, readOptions.GetTypeInfo(type))!;
+        return (IEvent)JsonSerializer.Deserialize(row.Data, type, readOptions)!;
     }
 }
