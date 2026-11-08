@@ -2,8 +2,8 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
-using VolcanoBlue.EventSourcing.EventStore;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
+using VolcanoBlue.EventSourcing;
+using VolcanoBlue.EventSourcing.Serialization;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 

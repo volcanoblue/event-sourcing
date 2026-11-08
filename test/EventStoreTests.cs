@@ -2,26 +2,26 @@ using System.Collections.Immutable;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using VolcanoBlue.EventSourcing.Abstractions;
-using VolcanoBlue.EventSourcing.EventStore;
+using VolcanoBlue.EventSourcing;
 using VolcanoBlue.EventSourcing.Extensions;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
+using VolcanoBlue.EventSourcing.Serialization;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 
-public class EntityRepositoryTests : IDisposable
+public class EventStoreTests : IDisposable
 {
     private const string StreamId = "Snap-1";
 
     private readonly SqliteFixture _fixture = new();
     private readonly EventDbContext _events;
     private readonly SnapshotDbContext _snapshots;
-    private readonly EntityRepository _repository;
+    private readonly EventStore _store;
 
-    public EntityRepositoryTests()
+    public EventStoreTests()
     {
         _events = _fixture.CreateEventStore();
         _snapshots = _fixture.CreateSnapshotStore();
-        _repository = new EntityRepository(_events, _snapshots);
+        _store = new EventStore(_events, _snapshots);
     }
 
     public void Dispose()
@@ -45,7 +45,7 @@ public class EntityRepositoryTests : IDisposable
     [Fact]
     public async Task LoadAsync_UnknownStream_ReturnsNone()
     {
-        var result = await _repository.LoadAsync<SnapshotEntity>("Missing-1");
+        var result = await _store.LoadAsync<SnapshotEntity>("Missing-1");
 
         Assert.False(result);
     }
@@ -55,7 +55,7 @@ public class EntityRepositoryTests : IDisposable
     {
         var entity = Renamed(1, 2);
 
-        await _repository.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, entity);
 
         Assert.Empty(entity.UncommittedEvents);
         using var reader = _fixture.CreateEventStore();
@@ -66,7 +66,7 @@ public class EntityRepositoryTests : IDisposable
     [Fact]
     public async Task SaveAsync_WithoutUncommittedEvents_DoesNothing()
     {
-        await _repository.SaveAsync(StreamId, new SnapshotEntity());
+        await _store.SaveAsync(StreamId, new SnapshotEntity());
 
         using var reader = _fixture.CreateEventStore();
         Assert.Empty(await reader.ReadStreamAsync(StreamId));
@@ -75,16 +75,16 @@ public class EntityRepositoryTests : IDisposable
     [Fact]
     public async Task SaveThenLoad_RoundTripsStateAndVersion_AndAllowsFurtherChanges()
     {
-        await _repository.SaveAsync(StreamId, Renamed(1, 3));
+        await _store.SaveAsync(StreamId, Renamed(1, 3));
 
-        var loaded = (await _repository.LoadAsync<SnapshotEntity>(StreamId)).Get();
+        var loaded = (await _store.LoadAsync<SnapshotEntity>(StreamId)).Get();
         Assert.Equal(Names(1, 3), loaded.State);
         Assert.Equal(4, loaded.Version);
 
         loaded.Rename("e4");
-        await _repository.SaveAsync(StreamId, loaded);
+        await _store.SaveAsync(StreamId, loaded);
 
-        var reloaded = (await _repository.LoadAsync<SnapshotEntity>(StreamId)).Get();
+        var reloaded = (await _store.LoadAsync<SnapshotEntity>(StreamId)).Get();
         Assert.Equal(Names(1, 4), reloaded.State);
         Assert.Equal(5, reloaded.Version);
     }
@@ -94,9 +94,9 @@ public class EntityRepositoryTests : IDisposable
     {
         var entity = PrivateCtorEntity.Create();
         entity.Rename("a");
-        await _repository.SaveAsync("Private-1", entity);
+        await _store.SaveAsync("Private-1", entity);
 
-        var loaded = (await _repository.LoadAsync<PrivateCtorEntity>("Private-1")).Get();
+        var loaded = (await _store.LoadAsync<PrivateCtorEntity>("Private-1")).Get();
 
         Assert.Equal("a", loaded.State);
     }
@@ -106,17 +106,17 @@ public class EntityRepositoryTests : IDisposable
     {
         var entity = new TestEntity("1");
         entity.Rename("a");
-        await _repository.SaveAsync(entity.StreamId, entity);
+        await _store.SaveAsync(entity.StreamId, entity);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _repository.LoadAsync<TestEntity>(entity.StreamId));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.LoadAsync<TestEntity>(entity.StreamId));
     }
 
     [Fact]
     public async Task LoadFromSnapshotAsync_NoSnapshot_FallsBackToFullReplay()
     {
-        await _repository.SaveAsync(StreamId, Renamed(1, 3));
+        await _store.SaveAsync(StreamId, Renamed(1, 3));
 
-        var loaded = (await _repository.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
 
         Assert.Equal(Names(1, 3), loaded.State);
         Assert.Equal(4, loaded.Version);
@@ -126,7 +126,7 @@ public class EntityRepositoryTests : IDisposable
     [Fact]
     public async Task LoadFromSnapshotAsync_NoSnapshotAndNoEvents_ReturnsNone()
     {
-        var result = await _repository.LoadFromSnapshotAsync<SnapshotEntity>("Missing-1");
+        var result = await _store.LoadFromSnapshotAsync<SnapshotEntity>("Missing-1");
 
         Assert.False(result);
     }
@@ -135,15 +135,15 @@ public class EntityRepositoryTests : IDisposable
     public async Task LoadFromSnapshotAsync_RestoresSnapshotAndReplaysOnlyLaterEvents()
     {
         var entity = Renamed(1, 10);
-        await _repository.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, entity);
 
         await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
         await _snapshots.SaveChangesAsync();
 
         Renamed(11, 20, entity);
-        await _repository.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, entity);
 
-        var loaded = (await _repository.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
 
         Assert.Equal(Names(1, 20), loaded.State);
         Assert.Equal(21, loaded.Version);
@@ -154,11 +154,11 @@ public class EntityRepositoryTests : IDisposable
     public async Task LoadFromSnapshotAsync_SnapshotWithoutLaterEvents_SetsNextVersion()
     {
         var entity = Renamed(1, 5);
-        await _repository.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, entity);
         await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
         await _snapshots.SaveChangesAsync();
 
-        var loaded = (await _repository.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
 
         Assert.Equal(Names(1, 5), loaded.State);
         Assert.Equal(6, loaded.Version);
@@ -211,16 +211,119 @@ public class EntityRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveAsync_TakesSnapshotWhenShouldTakeSnapshotIsTrue()
+    {
+        var entity = Renamed(1, 10);
+        entity.AutoSnapshot = true;
+        await _store.SaveAsync(StreamId, entity);
+
+        Renamed(11, 12, entity);
+        entity.AutoSnapshot = false;
+        await _store.SaveAsync(StreamId, entity);
+
+        using var snapshots = _fixture.CreateSnapshotStore();
+        var snapshot = (await snapshots.ByIdAsync<SnapshotEntity>(StreamId)).Get();
+        Assert.Equal(10, snapshot.EntityVersion);
+        Assert.Equal(Names(1, 10), snapshot.State);
+
+        var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        Assert.Equal(Names(1, 12), loaded.State);
+        Assert.Equal(2, loaded.ProcessedEvents);
+        Assert.Equal(13, loaded.Version);
+    }
+
+    [Fact]
+    public async Task SaveAsync_DoesNotSnapshotWhenShouldTakeSnapshotIsFalse()
+    {
+        await _store.SaveAsync(StreamId, Renamed(1, 3));
+
+        using var snapshots = _fixture.CreateSnapshotStore();
+        Assert.False(await snapshots.ByIdAsync<SnapshotEntity>(StreamId));
+    }
+
+    [Fact]
+    public async Task SaveAsync_KeepsOnlyTheLatestSnapshot()
+    {
+        var entity = Renamed(1, 3);
+        entity.AutoSnapshot = true;
+        await _store.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, Renamed(4, 6, entity));
+
+        using var snapshots = _fixture.CreateSnapshotStore();
+        Assert.Equal(6, (await snapshots.ByIdAsync<SnapshotEntity>(StreamId)).Get().EntityVersion);
+    }
+
+    [Fact]
+    public async Task SaveAsync_SnapshotVersionIsTheLastAppliedEvent_AndVersionIsNextEventId()
+    {
+        var entity = Renamed(1, 4);
+        entity.AutoSnapshot = true;
+        Assert.Equal(5, entity.Version);
+
+        await _store.SaveAsync(StreamId, entity);
+
+        using var snapshots = _fixture.CreateSnapshotStore();
+        Assert.Equal(4, (await snapshots.ByIdAsync<SnapshotEntity>(StreamId)).Get().EntityVersion);
+    }
+
+    [Fact]
+    public async Task LoadFromSnapshotAsync_ThenRaiseAndSave_ContinuesTheSequenceWithoutConflicts()
+    {
+        var entity = Renamed(1, 5);
+        entity.AutoSnapshot = true;
+        await _store.SaveAsync(StreamId, entity);
+
+        // Snapshot at 5, no tail: the next event must be 6.
+        var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        Assert.Equal(6, loaded.Version);
+        loaded.Rename("e6");
+        Assert.Equal(6, loaded.UncommittedEvents.Single().EventId);
+        await _store.SaveAsync(StreamId, loaded);
+
+        // AutoSnapshot isn't serialized, so the snapshot stays at 5 and the tail grows to e6..e8.
+        Renamed(7, 8, loaded);
+        await _store.SaveAsync(StreamId, loaded);
+
+        var reloaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        Assert.Equal(Names(1, 8), reloaded.State);
+        Assert.Equal(9, reloaded.Version);
+        Assert.Equal(3, reloaded.ProcessedEvents);
+
+        reloaded.Rename("e9");
+        Assert.Equal(9, reloaded.UncommittedEvents.Single().EventId);
+        await _store.SaveAsync(StreamId, reloaded);
+
+        using var reader = _fixture.CreateEventStore();
+        Assert.Equal(9, (await reader.ReadStreamAsync(StreamId)).Length);
+    }
+
+    [Fact]
+    public async Task SaveAsync_SnapshotWithWrongEntityVersion_ThrowsAfterSavingTheEvents()
+    {
+        var entity = new WrongVersionSnapshotEntity();
+        entity.Rename("a");
+        entity.Rename("b");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.SaveAsync("Wrong-1", entity));
+
+        Assert.Empty(entity.UncommittedEvents);
+        using var reader = _fixture.CreateEventStore();
+        Assert.Equal(2, (await reader.ReadStreamAsync("Wrong-1")).Length);
+        using var snapshots = _fixture.CreateSnapshotStore();
+        Assert.False(await snapshots.ByIdAsync<WrongVersionSnapshotEntity>("Wrong-1"));
+    }
+
+    [Fact]
     public async Task LoadFromSnapshotAsync_MatchesFullReplay()
     {
         var entity = Renamed(1, 5);
-        await _repository.SaveAsync(StreamId, entity);
+        await _store.SaveAsync(StreamId, entity);
         await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
         await _snapshots.SaveChangesAsync();
-        await _repository.SaveAsync(StreamId, Renamed(6, 8, entity));
+        await _store.SaveAsync(StreamId, Renamed(6, 8, entity));
 
-        var fromSnapshot = (await _repository.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
-        var fromEvents = (await _repository.LoadAsync<SnapshotEntity>(StreamId)).Get();
+        var fromSnapshot = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
+        var fromEvents = (await _store.LoadAsync<SnapshotEntity>(StreamId)).Get();
 
         Assert.Equal(fromEvents.State, fromSnapshot.State);
         Assert.Equal(fromEvents.Version, fromSnapshot.Version);
@@ -240,7 +343,7 @@ public class EntityRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void AddEventSourcing_RegistersEntityRepository()
+    public void AddEventSourcing_RegistersEventStore()
     {
         var services = new ServiceCollection();
         services.AddDbContext<EventDbContext>(o => o.UseSqlite("DataSource=:memory:"));
@@ -250,6 +353,6 @@ public class EntityRepositoryTests : IDisposable
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
 
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<EntityRepository>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<EventStore>());
     }
 }

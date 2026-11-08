@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace VolcanoBlue.EventSourcing.EventStore
+namespace VolcanoBlue.EventSourcing
 {
     /// <summary>
     /// Callback invoked at the end of <see cref="EventDbContext"/> model creation.

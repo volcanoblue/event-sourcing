@@ -1,6 +1,7 @@
 # VolcanoBlue.EventSourcing
 
 A .NET library with abstractions and an Entity Framework Core event store to speed up Event Sourcing development.
+Model your aggregates, then load and save them with a single type: `EventStore`.
 
 - **Target framework:** .NET 10
 - **Dependencies:** `Microsoft.EntityFrameworkCore`, `Moonad` (`Option<T>`)
@@ -18,22 +19,21 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 
 | Type | Namespace | Purpose |
 |------|-----------|---------|
-| `IEvent` | `Abstractions` | Contract for domain events. `EventId` is the sequence number in the stream and the entity version. |
+| `EventStore` | `EventStore` | **The main entry point.** `LoadAsync`, `LoadFromSnapshotAsync` and `SaveAsync` for your aggregates. |
 | `EventSourcedEntity` | `Abstractions` | Base class for aggregates: tracks `Version`, uncommitted events, and applies events. |
+| `IEvent` | `Abstractions` | Contract for domain events. `EventId` is the sequence number in the stream and the entity version. |
 | `ISnapshot` | `Abstractions` | Contract for a materialized state at a given `EntityVersion`. |
 | `ISnapshotable<T>` | `Abstractions` | Optional contract for entities that decide when and how to create a snapshot. |
-| `EventDbContext` | `EventStore` | Append-only event store (read streams, append, save). |
-| `SnapshotDbContext` | `EventStore` | Snapshot store (get by id, upsert). |
-| `EntityRepository` | `EventStore` | `LoadAsync`, `LoadFromSnapshotAsync` and `SaveAsync` for entities, on top of both contexts. |
 | `EventTypesRegistry` | `EventStore.Serialization` | Maps stored type names to CLR event types for deserialization. |
+| `EventDbContext` / `SnapshotDbContext` | `EventStore` | The EF Core stores behind the store. You rarely need them directly (see [Low-level stores](#low-level-stores)). |
 
 ### Versioning
 
 - A new entity starts at `Version = 1`.
 - `RaiseEvent(event)` increments `Version`, records the event as uncommitted and applies it via `ProcessEvent`.
 - Create events with the current `Version` as `EventId` *before* calling `RaiseEvent` (the first event has `EventId = 1`).
-- `Rehydrate(ImmutableArray<IEvent> stream)` is public and replays stored events (setting `Version` to each `EventId`) and then increments `Version`, so the next event gets the next id. Don't call it with an empty stream, as it would still bump the version.
-- `CommitEvents()` clears the uncommitted list after a successful save.
+- `Rehydrate(ImmutableArray<IEvent> stream)` replays stored events (setting `Version` to each `EventId`) and then increments `Version`, so the next event gets the next id. The store calls it for you.
+- `CommitEvents()` clears the uncommitted list; `EventStore.SaveAsync` calls it after a successful save.
 
 ## Quick start
 
@@ -47,21 +47,12 @@ public sealed record NameChanged(long EventId, string Name) : IEvent;
 
 ### 2. Define an entity
 
+Entities loaded by the store need a parameterless constructor (it can be private or protected).
+
 ```csharp
 public sealed class Customer : EventSourcedEntity
 {
-    public string StreamId { get; }
     public string? Name { get; private set; }
-
-    public Customer(string id) => StreamId = $"Customer-{id}";
-
-    public static Customer Rehydrate(string id, ImmutableArray<IEvent> stream)
-    {
-        var customer = new Customer(id);
-        if (!stream.IsEmpty)
-            customer.Rehydrate(stream);
-        return customer;
-    }
 
     public void Rename(string name)
     {
@@ -85,84 +76,123 @@ public sealed class Customer : EventSourcedEntity
 }
 ```
 
-### 3. Register event types and the stores
-
-Event types are resolved by full name when reading. Call `EventTypesRegistry.Initialize` once at startup with every assembly containing events (each assembly is scanned once; later calls with new assemblies add their events). With DI, `services.AddEventSourcing(typeof(NameChanged).Assembly)` does the same and registers `EntityRepository` (scoped); without arguments it uses the calling assembly.
+### 3. Register everything
 
 ```csharp
-EventTypesRegistry.Initialize(typeof(NameChanged).Assembly);
+using VolcanoBlue.EventSourcing.Extensions;
 
 services.AddDbContext<EventDbContext>(o => o.UseSqlite("Data Source=events.db"));
 services.AddDbContext<SnapshotDbContext>(o => o.UseSqlite("Data Source=events.db"));
+
+// Registers EventStore (scoped) and the event types of the given assemblies.
+// Without arguments it scans the calling assembly.
+services.AddEventSourcing(typeof(NameChanged).Assembly);
 ```
+
+Event types are resolved by full name when reading. `AddEventSourcing` calls `EventTypesRegistry.Initialize`; you can also call it yourself at startup. Each assembly is scanned once, and later calls with new assemblies add their events.
 
 ### 4. Save and load
 
+Inject `EventStore` and use the stream id of your aggregate:
+
 ```csharp
-// Save
-var customer = new Customer("42");
-customer.Rename("Ada");
+public sealed class CustomerService(EventStore store)
+{
+    public async Task RenameAsync(string id, string name)
+    {
+        var streamId = $"Customer-{id}";
 
-await eventStore.AppendToStreamAsync(customer.StreamId, customer.UncommittedEvents);
-await eventStore.SaveStreamAsync(); // throws DbUpdateException on conflicts
-customer.CommitEvents();
+        var customer = await store.LoadAsync<Customer>(streamId);
+        var entity = customer ? customer.Get() : new Customer();
 
-// Load
-var stream = await eventStore.ReadStreamAsync("Customer-42");
-var loaded = Customer.Rehydrate("42", stream);
+        entity.Rename(name);
+        await store.SaveAsync(streamId, entity); // throws DbUpdateException on conflicts
+    }
+}
 ```
 
-## Event store API (`EventDbContext`)
+## Store API (`EventStore`)
 
 | Method | Description |
 |--------|-------------|
-| `ReadStreamAsync(streamId, ct)` | All events of a stream ordered by id, as `ImmutableArray<IEvent>`. Empty if the stream doesn't exist. |
-| `ReadStreamFromEventIdAsync(streamId, eventId, ct)` | Events with `Id > eventId`; useful after loading a snapshot. |
-| `AppendToStreamAsync(streamId, events, ct)` | Serializes and stages events. Nothing is persisted until saved. |
-| `SaveStreamAsync(ct)` | Persists staged events; returns the number of rows written; throws `DbUpdateException` on failures such as a duplicate `EventId`. |
+| `LoadAsync<T>(streamId, ct)` | Reads the whole stream, creates a `T` and rehydrates it. Returns `Option<T>`; `None` when the stream is empty. |
+| `LoadFromSnapshotAsync<T>(streamId, ct)` | Loads the latest snapshot and replays only the events after it. Without a snapshot it replays the whole stream. `None` when neither exists. |
+| `SaveAsync<T>(streamId, entity, ct)` | Appends the uncommitted events, saves them in one round trip and calls `CommitEvents()`. Does nothing when there are no uncommitted events. If the entity implements `ISnapshotable<>` and `ShouldTakeSnapshot()` returns true, it then takes a snapshot and persists it (see [Snapshots](#snapshots)). |
 
-Storage details:
+Notes:
 
-- Events are stored in an internal `Event` table: `Id` (the event's `EventId`), `StreamId`, `OccurredAt` (UTC), `EventType` (full type name) and `Data` (JSON).
-- The primary key is `(Id, StreamId)`, so two writers appending the same `EventId` to a stream conflict and the save fails (optimistic concurrency).
-- Reads use `AsNoTracking` and return immutable arrays.
-- Failures are thrown as exceptions (e.g. `DbUpdateException` when the primary key conflicts).
+- `T` is created through a cached, compiled factory (no reflection per call), so non-public parameterless constructors are fine. A type without one throws `InvalidOperationException`.
+- Two writers appending the same `EventId` to a stream conflict and `SaveAsync` fails with `DbUpdateException` (optimistic concurrency).
+- The store is scoped, like the `DbContext`s it wraps. Don't share one instance across threads.
 
 ## Snapshots
 
-Snapshots avoid replaying long streams. A snapshot is any type implementing `ISnapshot` (`EntityVersion` = last event applied).
+Snapshots avoid replaying long streams. With `LoadFromSnapshotAsync<T>`, the entity is its own snapshot: `T : EventSourcedEntity, ISnapshot`, where `EntityVersion` is the last event applied.
 
 ```csharp
-public sealed record CustomerSnapshot(int EntityVersion, string? Name) : ISnapshot;
+public sealed class Customer : EventSourcedEntity, ISnapshot, ISnapshotable<Customer>
+{
+    public int EntityVersion { get; set; }
+    public string? Name { get; set; }
+
+    public bool ShouldTakeSnapshot() => Version % 50 == 0;
+
+    public Customer TakeSnapshot()
+    {
+        EntityVersion = (int)Version - 1;
+        return this;
+    }
+
+    // Rename and ProcessEvent as above
+}
 ```
 
-`SnapshotDbContext`:
+The snapshot is stored as JSON by `SnapshotDbContext`, so the entity needs a public parameterless constructor and settable state.
 
-| Method | Description |
-|--------|-------------|
-| `ByIdAsync<T>(id, ct)` | `Option<T>`; `None` if no snapshot exists. |
-| `UpsertAsync(entityId, snapshot, ct)` | Replaces the stored snapshot for the entity. Call `SaveChangesAsync()` to persist. |
-
-Typical rebuild flow:
+`SaveAsync` takes snapshots for you: after the events are saved, if the entity implements `ISnapshotable<TSnapshot>` (`TSnapshot` being a reference type) and `ShouldTakeSnapshot()` returns true, it calls `TakeSnapshot()` and replaces the stored snapshot under the stream id. The snapshot is taken after `CommitEvents()`, so no uncommitted events are serialized with it. The events and the snapshot are separate writes: if the snapshot fails, the events are already stored and the next load just replays from the previous snapshot.
 
 ```csharp
-var snapshot = await snapshots.ByIdAsync<CustomerSnapshot>("Customer-42");
-var state = snapshot ? snapshot.Get() : new CustomerSnapshot(0, null);
+await store.SaveAsync(streamId, customer); // snapshots automatically when ShouldTakeSnapshot() is true
 
-var tail = await events.ReadStreamFromEventIdAsync("Customer-42", state.EntityVersion);
-// apply tail on top of state
+// Later: latest snapshot + only the newer events
+var loaded = await store.LoadFromSnapshotAsync<Customer>(streamId);
 ```
 
-Implement `ISnapshotable<TSnapshot>` (`ShouldTakeSnapshot()` / `TakeSnapshot()`) on an entity to encapsulate when and how snapshots are taken.
-
-`EntityRepository.LoadFromSnapshotAsync<T>(streamId)` expects `T` to be its own snapshot (`T : EventSourcedEntity, ISnapshot`, deserialized by `SnapshotDbContext`, so it needs a public parameterless constructor and settable state). It replays only the events after `EntityVersion`; without a snapshot it replays the whole stream.
+The snapshot id is the stream id. Only the latest snapshot is kept. You can still write snapshots manually with `SnapshotDbContext` (see below).
 
 ## Serialization
 
 - Events are serialized with `System.Text.Json`; fields are included and property names are case-insensitive on read.
 - Types with private constructors can be deserialized (internal `PrivateConstructorConverter`), keeping domain types free of serialization concerns.
-- Event types must be concrete classes/records implementing `IEvent`, and their assembly must be passed to `EventTypesRegistry.Initialize`; otherwise reading throws `InvalidOperationException` ("Event type ... not found").
+- Event types must be concrete classes/records implementing `IEvent`, and their assembly must be registered (`AddEventSourcing` or `EventTypesRegistry.Initialize`); otherwise reading throws `InvalidOperationException` ("Event type ... not found").
 - The full type name is stored, so renaming or moving an event type breaks reading existing events.
+
+## Low-level stores
+
+`EventStore` is built on two EF Core contexts, available when you need direct control.
+
+`EventDbContext`:
+
+| Method | Description |
+|--------|-------------|
+| `ReadStreamAsync(streamId, ct)` | All events of a stream ordered by id, as `ImmutableArray<IEvent>`. Empty if the stream doesn't exist. |
+| `ReadStreamFromEventIdAsync(streamId, eventId, ct)` | Events with `Id > eventId`. |
+| `AppendToStreamAsync(streamId, events, ct)` | Serializes and stages events. Nothing is persisted until saved. |
+| `SaveStreamAsync(ct)` | Persists staged events; returns the number of rows written; throws `DbUpdateException` on failures such as a duplicate `EventId`. |
+
+`SnapshotDbContext`:
+
+| Method | Description |
+|--------|-------------|
+| `ByIdAsync<T>(entityId, ct)` | `Option<T>` with the highest stored version; `None` if no snapshot exists. |
+| `UpsertAsync(entityId, snapshot, ct)` | Replaces the stored snapshot for the entity. Call `SaveChangesAsync()` to persist. |
+
+Storage details:
+
+- Events are stored in the `Events` table (`Event` entity): `Id` (the event's `EventId`), `StreamId`, `OccurredAt` (UTC), `EventType` (full type name) and `Data` (JSON).
+- The primary key is `(Id, StreamId)`; there is also an index on `(StreamId, Id)` for reads.
+- Snapshots are stored in the `Snapshots` table (`Snapshot` entity): `EntityId`, `EntityVersion`, `Created` and `Data` (JSON), with primary key `(EntityId, EntityVersion)`.
+- Reads use `AsNoTracking` and return immutable arrays.
 
 ## Database setup
 
@@ -175,7 +205,7 @@ snapshotStore.GetService<IRelationalDatabaseCreator>().CreateTables(); // when s
 
 ## Mapping a legacy database
 
-If the events table already exists with its own names (database-first), keep the schema as is and map the library's `Event` entity onto it. `Event` and `Snapshot` are public, and each context accepts an optional callback resolved from DI: `EventModelConfiguration` for `EventDbContext` and `SnapshotModelConfiguration` for `SnapshotDbContext`. They are separate delegate types so each context only receives its own mapping. The callback runs after the default configuration, so your mapping wins.
+If the events table already exists with its own names (database-first), keep the schema as is and map the library's `Event` entity onto it. `Event` and `Snapshot` are public, and each context accepts an optional callback resolved from DI: `EventModelConfiguration` for `EventDbContext` and `SnapshotModelConfiguration` for `SnapshotDbContext`. They are separate delegate types so each context only receives its own mapping. The callback runs after the default configuration, so your mapping wins. `EventStore` works on top of the mapped contexts unchanged.
 
 ### 1. The existing table (`DatabaseFirst.db`)
 
@@ -208,10 +238,8 @@ CREATE TABLE snapshot_log (
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
-using VolcanoBlue.EventSourcing.EventStore;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
-
-EventTypesRegistry.Initialize(typeof(NameChanged).Assembly);
+using VolcanoBlue.EventSourcing;
+using VolcanoBlue.EventSourcing.Extensions;
 
 // The mapping callbacks are picked up by the contexts' constructors.
 services.AddSingleton<EventModelConfiguration>(modelBuilder =>
@@ -239,18 +267,15 @@ services.AddDbContext<EventDbContext>(options =>
     options.UseSqlite("Data Source=DatabaseFirst.db"));
 services.AddDbContext<SnapshotDbContext>(options =>
     options.UseSqlite("Data Source=DatabaseFirst.db"));
+
+services.AddEventSourcing(typeof(NameChanged).Assembly);
 ```
 
 ### 3. Use it as usual
 
 ```csharp
-await eventStore.AppendToStreamAsync("Customer-42", customer.UncommittedEvents);
-await eventStore.SaveStreamAsync();
-
-var stream = await eventStore.ReadStreamAsync("Customer-42");
-
-await snapshotStore.UpsertAsync("Customer-42", new CustomerSnapshot(2, "Ada"));
-await snapshotStore.SaveChangesAsync();
+await store.SaveAsync("Customer-42", customer);
+var loaded = await store.LoadAsync<Customer>("Customer-42");
 ```
 
 Notes:
@@ -262,14 +287,12 @@ Notes:
 
 ## Performance tips
 
-Built in: reads use `AsNoTracking`, a single async query per read, a `(StreamId, Id)` index, and change detection is disabled on `EventDbContext`.
+Built in: entity factories are compiled once per type, reads use `AsNoTracking` and deserialize while streaming, `SaveAsync` persists all events of an aggregate in one round trip, there is a `(StreamId, Id)` index, and change detection is disabled on `EventDbContext`.
 
 Recommended in your application:
 
-- **Use snapshots** for long streams: load the snapshot, then `ReadStreamFromEventIdAsync` from its `EntityVersion`. Take one every N events (see `ISnapshotable<T>`).
-- **Batch appends:** append all events of an aggregate in one `AppendToStreamAsync` and one `SaveStreamAsync` call (one round trip).
+- **Use snapshots** for long streams: `LoadFromSnapshotAsync` reads the latest snapshot and only the newer events. Let `ShouldTakeSnapshot()` return true every N events and `SaveAsync` handles the rest.
 - **Legacy schemas:** create an index on `(stream column, id column)` yourself, as the library doesn't create it for you.
-- **Pooling:** `AddDbContextPool<EventDbContext>` reduces allocations; the contexts hold no per-request state.
 - **Database tuning:** keep connection pooling on, use WAL for SQLite, and consider native `datetime`/`jsonb` columns when you own the schema.
 - **Caching:** keep hot aggregates in a short-lived cache and apply only events newer than the cached `Version`.
 
@@ -278,8 +301,9 @@ Recommended in your application:
 ```
 src/
   Abstractions/             IEvent, EventSourcedEntity, ISnapshot, ISnapshotable<T>
-  EventStore/               EventDbContext, SnapshotDbContext, errors, persistence records
-  EventStore/Serialization/ EventSerializer, SnapshotSerializer, EventTypesRegistry, PrivateConstructorConverter
+  (root)                    EventStore, EventDbContext, SnapshotDbContext, Event, Snapshot, model configuration
+  Serialization/            EventSerializer, SnapshotSerializer, EventTypesRegistry, PrivateConstructorConverter
+  Extensions/               AddEventSourcing (DI registration)
 test/                       xUnit tests using in-memory SQLite
 ```
 

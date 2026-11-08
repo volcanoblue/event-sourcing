@@ -2,7 +2,7 @@
 using System.Text.Json;
 using VolcanoBlue.EventSourcing.Abstractions;
 
-namespace VolcanoBlue.EventSourcing.EventStore.Serialization
+namespace VolcanoBlue.EventSourcing.Serialization
 {
     /// <summary>
     /// [INFRASTRUCTURE - SERIALIZATION] Serializes and deserializes domain events for persistence.

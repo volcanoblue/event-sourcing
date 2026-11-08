@@ -6,7 +6,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace VolcanoBlue.EventSourcing.EventStore.Serialization
+namespace VolcanoBlue.EventSourcing.Serialization
 {
     /// <summary>
     /// [INFRASTRUCTURE - SERIALIZATION] Universal JSON converter for types with private constructors.

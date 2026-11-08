@@ -5,9 +5,9 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Moonad;
 using VolcanoBlue.EventSourcing.Abstractions;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
+using VolcanoBlue.EventSourcing.Serialization;
 
-namespace VolcanoBlue.EventSourcing.EventStore
+namespace VolcanoBlue.EventSourcing
 {
     public sealed class SnapshotDbContext(DbContextOptions<SnapshotDbContext> options,
                                           SnapshotModelConfiguration? modelConfigAction = null) : DbContext(options)
@@ -32,11 +32,22 @@ namespace VolcanoBlue.EventSourcing.EventStore
         public async Task UpsertAsync<T>(string entityId, T snapshot, CancellationToken ct = default) 
             where T : ISnapshot
         {
-            var storedSnapshot = (await Snapshots.AsNoTracking()
-                                                 .FirstOrDefaultAsync(s => s.EntityId == entityId, ct))
-                                                 .ToOption();
-            if (storedSnapshot)
-                Remove(storedSnapshot.Get());
+            // Snapshots saved earlier by this same context instance are still tracked: reuse those entries
+            // instead of attaching a second instance with the same key.
+            var tracked = ChangeTracker.Entries<Snapshot>()
+                                       .Where(e => e.Entity.EntityId == entityId)
+                                       .ToList();
+            foreach (var entry in tracked)
+                entry.State = entry.State == EntityState.Added ? EntityState.Detached : EntityState.Deleted;
+
+            var stored = await Snapshots.AsNoTracking()
+                                        .Where(s => s.EntityId == entityId)
+                                        .ToListAsync(ct);
+            foreach (var row in stored)
+            {
+                if (!tracked.Exists(e => e.Entity.EntityVersion == row.EntityVersion))
+                    Remove(row);
+            }
 
             await Snapshots.AddAsync(SnapshotSerializer.Serialize(entityId, snapshot), ct);
         }

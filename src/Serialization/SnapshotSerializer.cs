@@ -2,7 +2,7 @@
 using System.Text.Json;
 using VolcanoBlue.EventSourcing.Abstractions;
 
-namespace VolcanoBlue.EventSourcing.EventStore.Serialization
+namespace VolcanoBlue.EventSourcing.Serialization
 {
     internal sealed class SnapshotSerializer
     {
@@ -11,7 +11,8 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
             return new(snapshotId,
                        snapshot.EntityVersion,
                        DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
-                       JsonSerializer.Serialize(snapshot));
+                       // Runtime type: T may be just ISnapshot (e.g. from a covariant ISnapshotable), which would drop all state.
+                       JsonSerializer.Serialize((object)snapshot, snapshot.GetType()));
         }
 
         public static T Deserialize<T>(Snapshot snapshot) =>

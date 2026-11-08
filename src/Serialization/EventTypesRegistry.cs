@@ -5,7 +5,7 @@ using System.Linq;
 using System.Reflection;
 using VolcanoBlue.EventSourcing.Abstractions;
 
-namespace VolcanoBlue.EventSourcing.EventStore.Serialization
+namespace VolcanoBlue.EventSourcing.Serialization
 {
     /// <summary>
     /// [INFRASTRUCTURE - TYPE REGISTRY] Cached registry for event type mappings.

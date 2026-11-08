@@ -6,9 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using VolcanoBlue.EventSourcing.Abstractions;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
+using VolcanoBlue.EventSourcing.Serialization;
 
-namespace VolcanoBlue.EventSourcing.EventStore
+namespace VolcanoBlue.EventSourcing
 {
     /// <summary>
     /// [INFRASTRUCTURE - EVENT STORE] Entity Framework DbContext for event persistence.

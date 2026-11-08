@@ -3,7 +3,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using VolcanoBlue.EventSourcing.Abstractions;
 
-namespace VolcanoBlue.EventSourcing.EventStore;
+namespace VolcanoBlue.EventSourcing;
 
 /// <summary>
 /// Per-type factory: the constructor is resolved and compiled once (static initializer is thread-safe),

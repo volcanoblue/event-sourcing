@@ -3,8 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using VolcanoBlue.EventSourcing.Abstractions;
-using VolcanoBlue.EventSourcing.EventStore;
-using VolcanoBlue.EventSourcing.EventStore.Serialization;
+using VolcanoBlue.EventSourcing;
+using VolcanoBlue.EventSourcing.Serialization;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 

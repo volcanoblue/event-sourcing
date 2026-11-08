@@ -1,4 +1,4 @@
-﻿namespace VolcanoBlue.EventSourcing.EventStore
+﻿namespace VolcanoBlue.EventSourcing
 {
     /// <summary>
     /// [INFRASTRUCTURE - PERSISTENCE MODEL] Record for storing events in database.

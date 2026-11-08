@@ -16,6 +16,9 @@ public sealed class SnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotabl
     [JsonIgnore]
     public int ProcessedEvents { get; private set; }
 
+    [JsonIgnore]
+    public bool AutoSnapshot { get; set; }
+
     public void Rename(string name) => RaiseEvent(new TestEvent(Version, name));
 
     public SnapshotEntity MarkSnapshot()
@@ -24,7 +27,7 @@ public sealed class SnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotabl
         return this;
     }
 
-    public bool ShouldTakeSnapshot() => true;
+    public bool ShouldTakeSnapshot() => AutoSnapshot;
 
     public SnapshotEntity TakeSnapshot() => MarkSnapshot();
 
@@ -53,4 +56,22 @@ public sealed class FieldEvent : IEvent
 {
     public long EventId { get; set; }
     public string Note = "";
+}
+
+/// <summary>Takes snapshots with an off-by-one EntityVersion (Version instead of Version - 1).</summary>
+public sealed class WrongVersionSnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotable<WrongVersionSnapshotEntity>
+{
+    public int EntityVersion { get; set; }
+
+    public void Rename(string name) => RaiseEvent(new TestEvent(Version, name));
+
+    public bool ShouldTakeSnapshot() => true;
+
+    public WrongVersionSnapshotEntity TakeSnapshot()
+    {
+        EntityVersion = (int)Version;
+        return this;
+    }
+
+    protected override void ProcessEvent(IEvent @event) { }
 }

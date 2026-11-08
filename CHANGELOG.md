@@ -6,16 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [2.0.0] - 2026-11-08
 
 ### Added
-- `EntityRepository` (`LoadAsync`, `LoadFromSnapshotAsync`, `SaveAsync`) with per-type compiled entity factories; registered by `AddEventSourcing`.
+- `EventStore` (`LoadAsync`, `LoadFromSnapshotAsync`, `SaveAsync`) with per-type compiled entity factories; registered by `AddEventSourcing`. `SaveAsync` takes and persists a snapshot when the entity is `ISnapshotable<>` and `ShouldTakeSnapshot()` returns true.
 - `AddEventSourcing(params Assembly[])` registers events from the given assemblies (the calling assembly by default).
 
 ### Changed
+- **Breaking:** namespaces now follow the folder structure: `VolcanoBlue.EventSourcing.EventStore` became `VolcanoBlue.EventSourcing` and `VolcanoBlue.EventSourcing.EventStore.Serialization` became `VolcanoBlue.EventSourcing.Serialization`. Update your `using` directives.
 - **Breaking:** `EventSourcedEntity.Rehydrate` is public and takes `ImmutableArray<IEvent>`; `ISnapshotable<out T>` is covariant; `SnapshotDbContext.ByIdAsync` takes `entityId`.
 - `EventTypesRegistry.Initialize` scans each assembly once instead of ignoring every call after the first, and tolerates types that fail to load.
 - `EventSerializer` writes with `IncludeFields`, matching reading.
 - `SnapshotDbContext.ByIdAsync` returns the highest snapshot version.
 
 ### Fixed
+- `SnapshotDbContext.UpsertAsync` no longer fails with an identity conflict when the same context instance replaces a snapshot it saved earlier.
+- Snapshots serialize the runtime type, so a snapshot referenced only as `ISnapshot` keeps its state.
 - Entities restored from a snapshot with no later events end at `EntityVersion + 1`.
 
 ## [1.0.2] - 2026-11-08
