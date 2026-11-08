@@ -1,60 +1,50 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
-using VolcanoBlue.EventSourcing;
-using VolcanoBlue.EventSourcing.Serialization;
+using Npgsql;
+using VolcanoBlue.EventSourcing.Extensions;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 
 /// <summary>
-/// Database-first scenario: DatabaseFirst.db already exists with its own table and column names,
-/// and both stores are mapped onto it through the model configuration callbacks of EventDbContext and SnapshotDbContext.
+/// Database-first scenario: the database already exists with its own table and column names,
+/// and the single EventStoreDbContext is mapped onto it through the model configuration callback.
 /// </summary>
 public sealed class DatabaseFirstTests : IDisposable
 {
-    private readonly string _directory = Path.Combine(Path.GetTempPath(), $"es-db-first-{Guid.NewGuid():N}");
-    private readonly string _databasePath;
+    private readonly DatabaseFixture _database = new(createSchema: false);
     private readonly ServiceProvider _provider;
-
-    static DatabaseFirstTests() => EventTypesRegistry.Initialize(typeof(SqliteFixture).Assembly);
 
     public DatabaseFirstTests()
     {
-        Directory.CreateDirectory(_directory);
-        _databasePath = Path.Combine(_directory, "DatabaseFirst.db");
         CreateDatabase();
 
         _provider = new ServiceCollection()
-            .AddSingleton<EventModelConfiguration>(MapEventTable)
-            .AddSingleton<SnapshotModelConfiguration>(MapSnapshotTable)
+            .AddSingleton<EventStoreModelConfiguration>(MapTables)
             // Models are cached per context type; keep these mappings apart from the default ones used by other tests.
-            .AddDbContext<EventDbContext>(options => options
-                .UseSqlite($"Data Source={_databasePath}")
+            .AddDbContext<EventStoreDbContext>(options => options
+                .UseNpgsql(_database.ConnectionString)
                 .ReplaceService<IModelCacheKeyFactory, DatabaseFirstCacheKeyFactory>())
-            .AddDbContext<SnapshotDbContext>(options => options
-                .UseSqlite($"Data Source={_databasePath}")
-                .ReplaceService<IModelCacheKeyFactory, DatabaseFirstCacheKeyFactory>())
+            .AddEventSourcing(options => options.AddEvent<TestEvent>())
             .BuildServiceProvider();
     }
 
     public void Dispose()
     {
         _provider.Dispose();
-        SqliteConnection.ClearAllPools();
-        Directory.Delete(_directory, recursive: true);
+        _database.Dispose();
     }
 
     // The schema is owned by the database, not by EF: no EnsureCreated and no migrations.
     private void CreateDatabase()
     {
-        using var connection = new SqliteConnection($"Data Source={_databasePath}");
+        using var connection = new NpgsqlConnection(_database.ConnectionString);
         connection.Open();
 
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE event_log (
-                event_id    INTEGER NOT NULL,
+                event_id    BIGINT  NOT NULL,
                 stream_name TEXT    NOT NULL,
                 created_utc TEXT    NOT NULL,
                 type_name   TEXT    NOT NULL,
@@ -64,7 +54,7 @@ public sealed class DatabaseFirstTests : IDisposable
 
             CREATE TABLE snapshot_log (
                 entity_name    TEXT    NOT NULL,
-                entity_version INTEGER NOT NULL,
+                entity_version BIGINT  NOT NULL,
                 created_utc    TEXT    NOT NULL,
                 state_json     TEXT    NOT NULL,
                 PRIMARY KEY (entity_name, entity_version)
@@ -73,127 +63,90 @@ public sealed class DatabaseFirstTests : IDisposable
         command.ExecuteNonQuery();
     }
 
-    private EventDbContext CreateStore() =>
-        _provider.CreateScope().ServiceProvider.GetRequiredService<EventDbContext>();
+    private EventStore CreateStore() =>
+        _provider.CreateScope().ServiceProvider.GetRequiredService<EventStore>();
 
-    private SnapshotDbContext CreateSnapshotStore() =>
-        _provider.CreateScope().ServiceProvider.GetRequiredService<SnapshotDbContext>();
-
-    [Fact]
-    public async Task AppendAndRead_UsesMappedTableAndColumns()
+    private NpgsqlDataReader Query(string sql)
     {
-        using (var writer = CreateStore())
-        {
-            await writer.AppendToStreamAsync("Test-1", [new TestEvent(1, "first"), new TestEvent(2, "second")]);
-            await writer.SaveStreamAsync();
-        }
+        var connection = new NpgsqlConnection(_database.ConnectionString);
+        connection.Open();
 
-        using var reader = CreateStore();
-        var result = await reader.ReadStreamAsync("Test-1");
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteReader(System.Data.CommandBehavior.CloseConnection);
+    }
 
-        Assert.Equal(["first", "second"], result.Cast<TestEvent>().Select(e => e.Name));
+    private static SnapshotEntity Renamed(int count, bool snapshot)
+    {
+        var entity = new SnapshotEntity { AutoSnapshot = snapshot };
+        for (var i = 1; i <= count; i++)
+            entity.Rename($"e{i}");
+        return entity;
     }
 
     [Fact]
-    public async Task SavedRows_LandInDatabaseFirstColumns()
+    public async Task SaveAndLoad_UseMappedTablesAndColumns()
     {
-        using (var writer = CreateStore())
-        {
-            await writer.AppendToStreamAsync("Test-7", [new TestEvent(1, "first")]);
-            await writer.SaveStreamAsync();
-        }
+        await CreateStore().SaveAsync("Test-1", Renamed(2, snapshot: false));
 
-        using var connection = new SqliteConnection($"Data Source={_databasePath}");
-        connection.Open();
+        var loaded = (await CreateStore().LoadAsync<SnapshotEntity>("Test-1"))!;
 
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT event_id, stream_name, created_utc, type_name, payload FROM event_log";
-        using var row = command.ExecuteReader();
+        Assert.Equal("e1,e2", loaded.State);
+        Assert.Equal(2, loaded.Version);
+    }
+
+    [Fact]
+    public async Task SavedEvents_LandInDatabaseFirstColumns()
+    {
+        await CreateStore().SaveAsync("Test-7", Renamed(1, snapshot: false));
+
+        using var row = Query("SELECT event_id, stream_name, created_utc, type_name, payload FROM event_log");
 
         Assert.True(row.Read());
         Assert.Equal(1L, row.GetInt64(0));
         Assert.Equal("Test-7", row.GetString(1));
         Assert.False(string.IsNullOrWhiteSpace(row.GetString(2)));
         Assert.Equal(typeof(TestEvent).FullName, row.GetString(3));
-        Assert.Contains("first", row.GetString(4));
+        Assert.Contains("e1", row.GetString(4));
         Assert.False(row.Read());
     }
 
     [Fact]
-    public async Task ReadStreamFromEventId_ReturnsOnlyNewerEvents()
+    public async Task SavedSnapshot_LandsInDatabaseFirstColumns_AndLoadsFromIt()
     {
-        using (var writer = CreateStore())
+        await CreateStore().SaveAsync("Test-9", Renamed(5, snapshot: true));
+
+        using (var row = Query("SELECT entity_name, entity_version, created_utc, state_json FROM snapshot_log"))
         {
-            await writer.AppendToStreamAsync("Test-1", [new TestEvent(1, "a"), new TestEvent(2, "b"), new TestEvent(3, "c")]);
-            await writer.SaveStreamAsync();
+            Assert.True(row.Read());
+            Assert.Equal("Test-9", row.GetString(0));
+            Assert.Equal(5L, row.GetInt64(1));
+            Assert.False(string.IsNullOrWhiteSpace(row.GetString(2)));
+            Assert.Contains("e1,e2,e3,e4,e5", row.GetString(3));
+            Assert.False(row.Read());
         }
 
-        using var reader = CreateStore();
-        var result = await reader.ReadStreamFromEventIdAsync("Test-1", 1);
-
-        Assert.Equal(["b", "c"], result.Cast<TestEvent>().Select(e => e.Name));
+        var loaded = (await CreateStore().LoadAsync<SnapshotEntity>("Test-9"))!;
+        Assert.Equal(0, loaded.ProcessedEvents); // restored from the snapshot, nothing replayed
     }
 
     [Fact]
-    public async Task Snapshot_UpsertAndRead_UsesMappedTableAndColumns()
+    public async Task NewerSnapshot_ReplacesThePreviousOne()
     {
-        using (var writer = CreateSnapshotStore())
-        {
-            await writer.UpsertAsync("Test-1", new TestSnapshot(3, "state"));
-            await writer.SaveChangesAsync();
-        }
+        var entity = Renamed(1, snapshot: true);
+        await CreateStore().SaveAsync("Test-1", entity);
+        entity.Rename("e2");
+        await CreateStore().SaveAsync("Test-1", entity);
 
-        using var reader = CreateSnapshotStore();
-        var result = await reader.ByIdAsync<TestSnapshot>("Test-1");
+        using var rows = Query("SELECT entity_version FROM snapshot_log");
 
-        Assert.True((bool)result);
-        Assert.Equal(new TestSnapshot(3, "state"), result.Get());
+        Assert.True(rows.Read());
+        Assert.Equal(2L, rows.GetInt64(0));
+        Assert.False(rows.Read());
     }
 
-    [Fact]
-    public async Task Snapshot_SavedRow_LandsInDatabaseFirstColumns()
+    private static void MapTables(ModelBuilder modelBuilder)
     {
-        using (var writer = CreateSnapshotStore())
-        {
-            await writer.UpsertAsync("Test-9", new TestSnapshot(5, "state"));
-            await writer.SaveChangesAsync();
-        }
-
-        using var connection = new SqliteConnection($"Data Source={_databasePath}");
-        connection.Open();
-
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT entity_name, entity_version, created_utc, state_json FROM snapshot_log";
-        using var row = command.ExecuteReader();
-
-        Assert.True(row.Read());
-        Assert.Equal("Test-9", row.GetString(0));
-        Assert.Equal(5L, row.GetInt64(1));
-        Assert.False(string.IsNullOrWhiteSpace(row.GetString(2)));
-        Assert.Contains("state", row.GetString(3));
-        Assert.False(row.Read());
-    }
-
-    [Fact]
-    public async Task Snapshot_Upsert_ReplacesPreviousVersion()
-    {
-        using (var writer = CreateSnapshotStore())
-        {
-            await writer.UpsertAsync("Test-1", new TestSnapshot(1, "old"));
-            await writer.SaveChangesAsync();
-        }
-
-        using (var writer = CreateSnapshotStore())
-        {
-            await writer.UpsertAsync("Test-1", new TestSnapshot(2, "new"));
-            await writer.SaveChangesAsync();
-        }
-
-        using var reader = CreateSnapshotStore();
-        Assert.Equal(new TestSnapshot(2, "new"), (await reader.ByIdAsync<TestSnapshot>("Test-1")).Get());
-    }
-
-    private static void MapSnapshotTable(ModelBuilder modelBuilder) =>
         modelBuilder.Entity<Snapshot>(entity =>
         {
             entity.ToTable("snapshot_log");
@@ -203,7 +156,6 @@ public sealed class DatabaseFirstTests : IDisposable
             entity.Property(e => e.Data).HasColumnName("state_json");
         });
 
-    private static void MapEventTable(ModelBuilder modelBuilder) =>
         modelBuilder.Entity<Event>(entity =>
         {
             entity.ToTable("event_log");
@@ -213,6 +165,7 @@ public sealed class DatabaseFirstTests : IDisposable
             entity.Property(e => e.EventType).HasColumnName("type_name");
             entity.Property(e => e.Data).HasColumnName("payload");
         });
+    }
 
     private sealed class DatabaseFirstCacheKeyFactory : IModelCacheKeyFactory
     {

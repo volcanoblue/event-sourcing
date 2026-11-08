@@ -19,9 +19,7 @@ public sealed class TestEntity : EventSourcedEntity
     {
         var entity = new TestEntity(id);
 
-        // FeedEvents always bumps Version, so an empty stream must be left at the initial version.
-        if (!stream.IsEmpty)
-            entity.Rehydrate(stream);
+        entity.Rehydrate(stream);
 
         return entity;
     }
@@ -34,7 +32,7 @@ public sealed class TestEntity : EventSourcedEntity
         if (name == CurrentName)
             return;
 
-        RaiseEvent(new TestEvent(Version, name));
+        RaiseEvent(new TestEvent(NextEventId, name));
     }
 
     protected override void ProcessEvent(IEvent @event)

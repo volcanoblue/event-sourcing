@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace VolcanoBlue.EventSourcing.Abstractions
 {
@@ -12,51 +13,35 @@ namespace VolcanoBlue.EventSourcing.Abstractions
     /// </summary>
     public abstract class EventSourcedEntity
     {
-        public long Version { get; protected set; } = 1;
+        [JsonIgnore]
+        public long Version { get; protected set; }
+        
+        protected long NextEventId => Version + 1;
+
         private readonly List<IEvent> _uncommittedEvents = [];
 
         protected EventSourcedEntity() =>
             UncommittedEvents = _uncommittedEvents.AsReadOnly();
 
+        [JsonIgnore]
         public IReadOnlyList<IEvent> UncommittedEvents { get; }
 
-        protected void RaiseEvent<TEvent>(TEvent @event) where TEvent : IEvent
+        protected void RaiseEvent(IEvent @event)
         {
-            Version++;
+            Replay(@event);
             _uncommittedEvents.Add(@event);
-            try
-            {
-                ProcessEvent(@event);
-            }
-            catch
-            {
-                // A rejected event must not stay queued nor consume a version.
-                _uncommittedEvents.RemoveAt(_uncommittedEvents.Count - 1);
-                Version--;
-                throw;
-            }
         }
 
         public void Rehydrate(ImmutableArray<IEvent> stream)
         {
             for (var i = 0; i < stream.Length; i++)
-            {
-                var @event = stream[i];
-                Version = @event.EventId;
-                ProcessEvent(@event);
-            }
-
-            Version++;
+                Replay(stream[i]);
         }
 
-        /// <summary>
-        /// Continues from a snapshot: sets <c>Version</c> to the snapshot version and replays the later events.
-        /// Without later events <c>Version</c> ends at <paramref name="snapshotVersion"/> + 1.
-        /// </summary>
-        internal void RehydrateFromSnapshot(long snapshotVersion, ImmutableArray<IEvent> stream)
+        internal void Replay(IEvent @event)
         {
-            Version = snapshotVersion;
-            Rehydrate(stream);
+            Version = @event.EventId;
+            ProcessEvent(@event);
         }
 
         internal void RestoreVersion(long version) => Version = version;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,6 +14,11 @@ namespace VolcanoBlue.EventSourcing.Serialization
     /// Architectural Role: Enables deserialization of domain value objects by invoking private constructors via reflection.
     /// Preserves domain model purity by keeping serialization concerns in infrastructure layer.
     /// </summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Only added to the options when reflection is enabled.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2067", Justification = "Only added to the options when reflection is enabled.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Only added to the options when reflection is enabled.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2090", Justification = "Only added to the options when reflection is enabled.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Only added to the options when dynamic code is supported.")]
     internal sealed class PrivateConstructorConverter : JsonConverterFactory
     {
         private static readonly ConcurrentDictionary<Type, bool> CanConvertCache = [];

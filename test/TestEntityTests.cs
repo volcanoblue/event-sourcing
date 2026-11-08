@@ -1,26 +1,28 @@
-using Microsoft.EntityFrameworkCore;
+using System.Collections.Immutable;
+using VolcanoBlue.EventSourcing.Abstractions;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 
 public class TestEntityTests : IDisposable
 {
-    private readonly SqliteFixture _fixture = new();
+    private readonly DatabaseFixture _fixture = new();
 
     public void Dispose() => _fixture.Dispose();
 
     private async Task<TestEntity> LoadAsync(string id)
     {
-        using var store = _fixture.CreateEventStore();
-        var result = await store.ReadStreamAsync($"Test-{id}");
-        return TestEntity.Rehydrate(id, result);
+        using var db = _fixture.CreateContext();
+        var stream = ImmutableArray.CreateBuilder<IEvent>();
+        await foreach (var row in db.ReadStream($"Test-{id}", 0))
+            stream.Add(DatabaseFixture.Options.Runtime.Events.Deserialize(row));
+
+        return TestEntity.Rehydrate(id, stream.ToImmutable());
     }
 
     private async Task SaveAsync(TestEntity entity)
     {
-        using var store = _fixture.CreateEventStore();
-        await store.AppendToStreamAsync(entity.StreamId, entity.UncommittedEvents);
-        await store.SaveStreamAsync();
-        entity.CommitEvents();
+        using var db = _fixture.CreateContext();
+        await _fixture.CreateStore(db).SaveAsync(entity.StreamId, entity);
     }
 
     [Fact]
@@ -32,7 +34,7 @@ public class TestEntityTests : IDisposable
         entity.Rename("b");
 
         Assert.Equal([1L, 2L], entity.UncommittedEvents.Select(e => e.EventId));
-        Assert.Equal(3, entity.Version);
+        Assert.Equal(2, entity.Version);
         Assert.Equal("b", entity.CurrentName);
     }
 
@@ -69,7 +71,7 @@ public class TestEntityTests : IDisposable
         var loaded = await LoadAsync("missing");
 
         Assert.Null(loaded.CurrentName);
-        Assert.Equal(1, loaded.Version);
+        Assert.Equal(0, loaded.Version);
     }
 
     [Fact]
@@ -86,7 +88,7 @@ public class TestEntityTests : IDisposable
 
         var final = await LoadAsync("1");
         Assert.Equal(["a", "b"], final.History);
-        Assert.Equal(3, final.Version);
+        Assert.Equal(2, final.Version);
     }
 
     [Fact]
@@ -102,10 +104,7 @@ public class TestEntityTests : IDisposable
         second.Rename("from-second");
         await SaveAsync(first);
 
-        using var store = _fixture.CreateEventStore();
-        await store.AppendToStreamAsync(second.StreamId, second.UncommittedEvents);
-
-        await Assert.ThrowsAsync<DbUpdateException>(() => store.SaveStreamAsync());
+        await Assert.ThrowsAsync<ConcurrencyException>(() => SaveAsync(second));
         Assert.Equal(["a", "from-first"], (await LoadAsync("1")).History);
     }
 }

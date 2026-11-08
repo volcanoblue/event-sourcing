@@ -1,120 +1,77 @@
-using VolcanoBlue.EventSourcing.Abstractions;
+using Microsoft.EntityFrameworkCore;
 
 namespace VolcanoBlue.EventSourcing.Tests;
 
 /// <summary>
-/// Demonstrates snapshots and events working together: 10 events, a snapshot, then 10 more events.
-/// Rebuilding state loads the snapshot and replays only the events after its version.
+/// Snapshots and events working together: 10 events, a snapshot, then 10 more events.
+/// Loading restores the snapshot and replays only the events after its version.
 /// </summary>
 public class SnapshotWithEventsTests : IDisposable
 {
     private const string StreamId = "Test-1";
-    private const string EntityId = "Test-1";
 
-    private readonly SqliteFixture _fixture = new();
+    private readonly DatabaseFixture _fixture = new();
 
     public void Dispose() => _fixture.Dispose();
 
-    private static TestEvent[] EventsInRange(int from, int to) =>
-        Enumerable.Range(from, to - from + 1).Select(i => new TestEvent(i, $"e{i}")).ToArray();
+    private static string Names(int from, int to) =>
+        string.Join(",", Enumerable.Range(from, to - from + 1).Select(i => $"e{i}"));
 
-    private static string Apply(string state, IEvent e) =>
-        state.Length == 0 ? ((TestEvent)e).Name : $"{state},{((TestEvent)e).Name}";
-
-    private async Task AppendAsync(IEnumerable<IEvent> events)
+    private static void Rename(SnapshotEntity entity, int from, int to)
     {
-        using var store = _fixture.CreateEventStore();
-        await store.AppendToStreamAsync(StreamId, events);
-        await store.SaveStreamAsync();
+        for (var i = from; i <= to; i++)
+            entity.Rename($"e{i}");
     }
 
-    private async Task SnapshotAsync(TestSnapshot snapshot)
+    private async Task SaveAsync(SnapshotEntity entity, bool snapshot)
     {
-        using var store = _fixture.CreateSnapshotStore();
-        await store.UpsertAsync(EntityId, snapshot);
-        await store.SaveChangesAsync();
+        entity.AutoSnapshot = snapshot;
+        using var db = _fixture.CreateContext();
+        await _fixture.CreateStore(db).SaveAsync(StreamId, entity);
     }
 
-    private async Task<(TestSnapshot State, int ReplayedEvents)> RebuildAsync()
+    private async Task<SnapshotEntity> LoadAsync()
     {
-        TestSnapshot state = new(0, "");
-
-        using (var snapshots = _fixture.CreateSnapshotStore())
-        {
-            var snapshot = await snapshots.ByIdAsync<TestSnapshot>(EntityId);
-            if (snapshot)
-                state = snapshot.Get();
-        }
-
-        using var events = _fixture.CreateEventStore();
-        var result = await events.ReadStreamFromEventIdAsync(StreamId, state.EntityVersion);
-
-        var replayed = result;
-        foreach (var e in replayed)
-            state = new TestSnapshot(e.EventId, Apply(state.State, e));
-
-        return (state, replayed.Length);
+        using var db = _fixture.CreateContext();
+        return (await _fixture.CreateStore(db).LoadAsync<SnapshotEntity>(StreamId))!;
     }
 
     [Fact]
-    public async Task TenEvents_Snapshot_TenMoreEvents_RebuildsFromSnapshotAndReplaysOnlyNewEvents()
+    public async Task TenEvents_Snapshot_TenMoreEvents_LoadsFromSnapshotAndReplaysOnlyNewEvents()
     {
-        // Phase 1: 10 events, then snapshot the state at version 10.
-        await AppendAsync(EventsInRange(1, 10));
-        var (atTen, replayedFirst) = await RebuildAsync();
+        var entity = new SnapshotEntity();
+        Rename(entity, 1, 10);
+        await SaveAsync(entity, snapshot: true);
 
-        Assert.Equal(10, replayedFirst);
-        Assert.Equal(10, atTen.EntityVersion);
-        await SnapshotAsync(atTen);
+        Rename(entity, 11, 20);
+        await SaveAsync(entity, snapshot: false);
 
-        // Phase 2: 10 more events after the snapshot.
-        await AppendAsync(EventsInRange(11, 20));
+        using (var db = _fixture.CreateContext())
+            Assert.Equal(20, await db.Events.CountAsync());
 
-        // The full stream holds all 20 events...
-        using (var store = _fixture.CreateEventStore())
-        {
-            var all = await store.ReadStreamAsync(StreamId);
-            Assert.Equal(20, all.Length);
-        }
+        var loaded = await LoadAsync();
 
-        // ...but rebuilding replays only the 10 events newer than the snapshot.
-        var (current, replayed) = await RebuildAsync();
-
-        Assert.Equal(10, replayed);
-        Assert.Equal(20, current.EntityVersion);
-        Assert.Equal(string.Join(",", Enumerable.Range(1, 20).Select(i => $"e{i}")), current.State);
-    }
-
-    [Fact]
-    public async Task StateFromSnapshotPlusTail_EqualsStateFromFullReplay()
-    {
-        await AppendAsync(EventsInRange(1, 10));
-        await SnapshotAsync(new TestSnapshot(10, string.Join(",", Enumerable.Range(1, 10).Select(i => $"e{i}"))));
-        await AppendAsync(EventsInRange(11, 20));
-
-        var (fromSnapshot, _) = await RebuildAsync();
-
-        using var store = _fixture.CreateEventStore();
-        var full = await store.ReadStreamAsync(StreamId);
-        var fromScratch = full.Aggregate("", Apply);
-
-        Assert.Equal(fromScratch, fromSnapshot.State);
+        Assert.Equal(10, loaded.ProcessedEvents);
+        Assert.Equal(20, loaded.Version);
+        Assert.Equal(Names(1, 20), loaded.State);
     }
 
     [Fact]
     public async Task NewerSnapshot_ReplacesOlder_AndReducesReplay()
     {
-        await AppendAsync(EventsInRange(1, 10));
-        await SnapshotAsync(new TestSnapshot(10, string.Join(",", Enumerable.Range(1, 10).Select(i => $"e{i}"))));
-        await AppendAsync(EventsInRange(11, 20));
+        var entity = new SnapshotEntity();
+        Rename(entity, 1, 10);
+        await SaveAsync(entity, snapshot: true);
+        Rename(entity, 11, 20);
+        await SaveAsync(entity, snapshot: false);
+        Assert.Equal(10, (await LoadAsync()).ProcessedEvents);
 
-        var (atTwenty, replayedBefore) = await RebuildAsync();
-        Assert.Equal(10, replayedBefore);
+        Rename(entity, 21, 21);
+        await SaveAsync(entity, snapshot: true);
 
-        await SnapshotAsync(atTwenty);
-
-        var (again, replayedAfter) = await RebuildAsync();
-        Assert.Equal(0, replayedAfter);
-        Assert.Equal(atTwenty, again);
+        var loaded = await LoadAsync();
+        Assert.Equal(0, loaded.ProcessedEvents);
+        Assert.Equal(21, loaded.Version);
+        Assert.Equal(Names(1, 21), loaded.State);
     }
 }
