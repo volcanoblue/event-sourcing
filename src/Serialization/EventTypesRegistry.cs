@@ -32,7 +32,15 @@ namespace VolcanoBlue.EventSourcing.Serialization
                         .Where(t => typeof(IEvent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
 
                     foreach (var type in eventTypes)
-                        _types.TryAdd(type.FullName!, type);
+                    {
+                        if (!_types.TryAdd(type.FullName!, type) && _types[type.FullName!] != type)
+                        {
+                            throw new InvalidOperationException(
+                                $"Event type name '{type.FullName}' is declared in more than one assembly " +
+                                $"('{_types[type.FullName!].Assembly.GetName().Name}' and '{assembly.GetName().Name}'). " +
+                                "Stored events identify their type by full name, so the names must be unique.");
+                        }
+                    }
                 }
             }
         }

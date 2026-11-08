@@ -298,7 +298,80 @@ public class EventStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveAsync_SnapshotWithWrongEntityVersion_ThrowsAfterSavingTheEvents()
+    public async Task LoadFromSnapshotAsync_RestoresEncapsulatedEntity_WithoutPublicConstructorOrSetters()
+    {
+        var entity = EncapsulatedEntity.Create();
+        entity.Rename("a");
+        entity.Rename("b");
+        await _store.SaveAsync(StreamId, entity);
+
+        var loaded = (await _store.LoadFromSnapshotAsync<EncapsulatedEntity>(StreamId)).Get();
+
+        Assert.Equal(["a", "b"], loaded.Names);
+        Assert.Equal(2, loaded.Renames);
+        Assert.Equal("b", loaded.Last);
+        Assert.Equal(3, loaded.Version);
+        Assert.Equal(7, loaded.Skipped); // [JsonIgnore] state is not persisted
+
+        loaded.Rename("c");
+        await _store.SaveAsync(StreamId, loaded);
+
+        var again = (await _store.LoadFromSnapshotAsync<EncapsulatedEntity>(StreamId)).Get();
+        Assert.Equal(["a", "b", "c"], again.Names);
+        Assert.Equal(4, again.Version);
+    }
+
+    [Fact]
+    public void RaiseEvent_WhenProcessEventThrows_KeepsVersionAndQueueUntouched()
+    {
+        var entity = new RejectingEntity();
+        entity.Rename("ok");
+
+        Assert.Throws<InvalidOperationException>(() => entity.Rename("bad"));
+
+        Assert.Equal(2, entity.Version);
+        Assert.Single(entity.UncommittedEvents);
+    }
+
+    [Fact]
+    public async Task SaveAsync_AfterAConcurrencyConflict_DoesNotResendTheRejectedEvents()
+    {
+        var first = new SnapshotEntity();
+        first.Rename("a");
+        await _store.SaveAsync(StreamId, first);
+
+        var stale = new SnapshotEntity();
+        stale.Rename("conflict");
+        await Assert.ThrowsAsync<DbUpdateException>(() => _store.SaveAsync(StreamId, stale));
+
+        var current = (await _store.LoadAsync<SnapshotEntity>(StreamId)).Get();
+        current.Rename("b");
+        await _store.SaveAsync(StreamId, current);
+
+        Assert.Equal(2, (await _events.ReadStreamAsync(StreamId)).Length);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WithTheSameVersionAsTheStoredSnapshot_ReplacesIt()
+    {
+        var entity = Renamed(1, 3);
+        await _snapshots.UpsertAsync(StreamId, entity);
+        await _snapshots.SaveChangesAsync();
+
+        using var other = _fixture.CreateSnapshotStore();
+        var sameVersion = new SnapshotEntity();
+        for (var i = 0; i < 3; i++)
+            sameVersion.Rename("x");
+        await other.UpsertAsync(StreamId, sameVersion);
+        await other.SaveChangesAsync();
+
+        using var reader = _fixture.CreateSnapshotStore();
+        Assert.Equal(1, await reader.Set<Snapshot>().CountAsync(s => s.EntityId == StreamId));
+        Assert.Equal("x,x,x", (await reader.ByIdAsync<SnapshotEntity>(StreamId)).Get().State);
+    }
+
+    [Fact]
+    public async Task SaveAsync_SnapshotWithWrongEntityVersion_ThrowsBeforeSavingAnything()
     {
         var entity = new WrongVersionSnapshotEntity();
         entity.Rename("a");
@@ -306,9 +379,9 @@ public class EventStoreTests : IDisposable
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => _store.SaveAsync("Wrong-1", entity));
 
-        Assert.Empty(entity.UncommittedEvents);
+        Assert.Equal(2, entity.UncommittedEvents.Count);
         using var reader = _fixture.CreateEventStore();
-        Assert.Equal(2, (await reader.ReadStreamAsync("Wrong-1")).Length);
+        Assert.Empty(await reader.ReadStreamAsync("Wrong-1"));
         using var snapshots = _fixture.CreateSnapshotStore();
         Assert.False(await snapshots.ByIdAsync<WrongVersionSnapshotEntity>("Wrong-1"));
     }

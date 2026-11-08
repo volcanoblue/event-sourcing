@@ -49,6 +49,18 @@ namespace VolcanoBlue.EventSourcing
                 .OrderBy(e => e.Id)
                 .AsAsyncEnumerable(), ct);
 
+        // Indexed loop: avoids boxing an enumerator for the uncommitted events.
+        public Task AppendToStreamAsync(string streamId, IReadOnlyList<IEvent> events, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var occurredAt = EventSerializer.Timestamp();
+            for (var i = 0; i < events.Count; i++)
+                Events.Add(EventSerializer.Serialize(streamId, events[i], occurredAt));
+
+            return Task.CompletedTask;
+        }
+
         public Task AppendToStreamAsync(string streamId, IEnumerable<IEvent> events, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -64,9 +76,15 @@ namespace VolcanoBlue.EventSourcing
 
         public async Task<int> SaveStreamAsync(CancellationToken ct = default)
         {
-            var saved = await SaveChangesAsync(ct);
-            ChangeTracker.Clear();
-            return saved;
+            try
+            {
+                return await SaveChangesAsync(ct);
+            }
+            finally
+            {
+                // Also on failure (e.g. a concurrency conflict): otherwise a retry would re-send the rejected rows.
+                ChangeTracker.Clear();
+            }
         }
 
         // Streams rows straight into the result, without an intermediate list of rows.

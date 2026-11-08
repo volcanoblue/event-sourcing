@@ -10,7 +10,7 @@ namespace VolcanoBlue.EventSourcing.Tests;
 
 public sealed record TestEvent(long EventId, string Name) : IEvent;
 
-public sealed record TestSnapshot(int EntityVersion, string State) : ISnapshot;
+public sealed record TestSnapshot(long EntityVersion, string State) : ISnapshot;
 
 /// <summary>
 /// Each fixture owns a private in-memory SQLite database that lives as long as its open connection.

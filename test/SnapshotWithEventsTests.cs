@@ -51,7 +51,7 @@ public class SnapshotWithEventsTests : IDisposable
 
         var replayed = result;
         foreach (var e in replayed)
-            state = new TestSnapshot((int)e.EventId, Apply(state.State, e));
+            state = new TestSnapshot(e.EventId, Apply(state.State, e));
 
         return (state, replayed.Length);
     }

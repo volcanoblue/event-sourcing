@@ -3,6 +3,26 @@
 All notable changes to `VolcanoBlue.EventSourcing` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [4.0.0] - 2026-11-08
+
+### Added
+- Snapshots of entities are serialized by instance fields: entities need no public setters, and can have a private parameterless constructor and `readonly` fields. `[JsonIgnore]` on a property or `[NonSerialized]` on a field excludes its state.
+
+### Fixed
+- `EventDbContext.SaveStreamAsync` clears the change tracker even when saving fails, so a retry does not resend rejected events.
+- `RaiseEvent` rolls back `Version` and the uncommitted list when `ProcessEvent` throws.
+- `SnapshotDbContext.UpsertAsync` overwrites a stored snapshot with the same version instead of failing with an identity conflict.
+
+### Performance
+- Entity snapshots read and write fields through emitted delegates (not `FieldInfo`) and a pooled buffer; appending events uses an indexed loop.
+
+### Changed
+- **Breaking:** `ISnapshot.EntityVersion` is `long` (was `int`), matching `EventSourcedEntity.Version` and the stored column, so no casts are needed.
+- **Breaking:** `EventSourcedEntity.UncommittedEvents` is an `IReadOnlyList<IEvent>` (was `IReadOnlyCollection<IEvent>`).
+- **Breaking:** entity snapshots are written from fields instead of public properties: logic in property setters no longer runs on restore, and `Version` comes from the snapshot's `EntityVersion`.
+- **Breaking:** `EventStore.SaveAsync` throws `InvalidOperationException` before saving anything when a snapshot's `EntityVersion` is not the last applied event (`Version - 1`).
+- **Breaking:** `EventTypesRegistry.Initialize` throws when two assemblies declare event types with the same full name, instead of silently keeping the first.
+
 ## [3.0.0] - 2026-11-08
 
 ### Changed

@@ -8,10 +8,9 @@ namespace VolcanoBlue.EventSourcing
 {
     /// <summary>
     /// [INFRASTRUCTURE - REPOSITORY] Loads and saves event-sourced entities.
-    /// Entities loaded from events need a parameterless constructor. When loading from a snapshot, the object
-    /// deserialized by <see cref="SnapshotDbContext"/> is used directly if it already is a <c>T</c>; otherwise
-    /// <c>T</c> needs a constructor taking the snapshot (<c>T(TSnapshot)</c>) that sets <c>Version</c> to the snapshot version.
-    /// Constructors may be non-public. All reflection runs once per type: factories are compiled and cached,
+    /// Entities need a parameterless constructor, which may be non-public. When loading from a snapshot, the entity is
+    /// the object restored by <see cref="SnapshotDbContext"/>, with <c>Version</c> set from the snapshot.
+    /// All reflection runs once per type: factories and accessors are compiled and cached,
     /// so the hot path is plain delegate calls.
     /// </summary>
     public sealed class EventStore(EventDbContext events, SnapshotDbContext snapshots)
@@ -43,17 +42,19 @@ namespace VolcanoBlue.EventSourcing
                 return await LoadAsync<T>(streamId, ct);
             
             var entity = exists.Get();
-            var stream = await events.ReadStreamFromEventIdAsync(streamId, entity.EntityVersion, ct);
-            entity.RehydrateFromSnapshot(entity.EntityVersion, stream);
+            var snapshotVersion = entity.Version - 1;
+            var stream = await events.ReadStreamFromEventIdAsync(streamId, snapshotVersion, ct);
+            entity.RehydrateFromSnapshot(snapshotVersion, stream);
             return entity.ToOption();
         }
 
         /// <summary>
         /// Appends the uncommitted events to <paramref name="streamId"/>, saves them and marks them as committed.
         /// When the entity implements <see cref="ISnapshot"/> and <c>ShouldTakeSnapshot()</c> returns true, the entity
-        /// itself is persisted as the snapshot under <paramref name="streamId"/> after the events are saved. The two writes are separate: if the snapshot fails the events are already
-        /// stored, and the next load simply replays from the previous snapshot. The snapshot's <c>EntityVersion</c> must
-        /// equal the entity's last applied event (<c>Version - 1</c>), otherwise <see cref="InvalidOperationException"/> is thrown.
+        /// itself is persisted as the snapshot under <paramref name="streamId"/> after the events are saved. The two writes are
+        /// separate: if the snapshot fails the events are already stored, and the next load simply replays from the previous
+        /// snapshot. The snapshot's <c>EntityVersion</c> must equal the entity's last applied event (<c>Version - 1</c>),
+        /// otherwise <see cref="InvalidOperationException"/> is thrown before anything is saved.
         /// </summary>
         public async Task SaveAsync<T>(string streamId, T entity, CancellationToken ct = default)
             where T : EventSourcedEntity
@@ -61,21 +62,23 @@ namespace VolcanoBlue.EventSourcing
             if (entity.UncommittedEvents.Count == 0)
                 return;
 
+            var snapshot = entity is ISnapshot candidate && candidate.ShouldTakeSnapshot() ? candidate : null;
+
+            // EntityVersion must be the last applied event (Version - 1). Loading replays events with an id
+            // greater than it, so an off-by-one would silently skip or duplicate an event. Checked before saving.
+            if (snapshot is not null && snapshot.EntityVersion != entity.Version - 1)
+            {
+                throw new InvalidOperationException(
+                    $"Snapshot of '{streamId}' has EntityVersion {snapshot.EntityVersion}, but the last applied event is {entity.Version - 1}. " +
+                    "Nothing was saved.");
+            }
+
             await events.AppendToStreamAsync(streamId, entity.UncommittedEvents, ct);
             await events.SaveStreamAsync(ct);
             entity.CommitEvents();
 
-            if (entity is ISnapshot snapshot && snapshot.ShouldTakeSnapshot())
+            if (snapshot is not null)
             {
-                // EntityVersion must be the last applied event (Version - 1). Loading replays events with an id
-                // greater than it, so an off-by-one would silently skip or duplicate an event.
-                if (snapshot.EntityVersion != entity.Version - 1)
-                {
-                    throw new InvalidOperationException(
-                        $"Snapshot of '{streamId}' has EntityVersion {snapshot.EntityVersion}, but the last applied event is {entity.Version - 1}. " +
-                        "The events were saved; the snapshot was not.");
-                }
-
                 await snapshots.UpsertAsync(streamId, snapshot, ct);
                 await snapshots.SaveChangesAsync(ct);
             }

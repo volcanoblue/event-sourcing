@@ -19,17 +19,17 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 
 | Type | Namespace | Purpose |
 |------|-----------|---------|
-| `EventStore` | `EventStore` | **The main entry point.** `LoadAsync`, `LoadFromSnapshotAsync` and `SaveAsync` for your aggregates. |
+| `EventStore` | (root) | **The main entry point.** `LoadAsync`, `LoadFromSnapshotAsync` and `SaveAsync` for your aggregates. |
 | `EventSourcedEntity` | `Abstractions` | Base class for aggregates: tracks `Version`, uncommitted events, and applies events. |
 | `IEvent` | `Abstractions` | Contract for domain events. `EventId` is the sequence number in the stream and the entity version. |
 | `ISnapshot` | `Abstractions` | Contract for a materialized state at a given `EntityVersion`. An entity can implement it to be its own snapshot and decide when one is taken (`ShouldTakeSnapshot()`). |
-| `EventTypesRegistry` | `EventStore.Serialization` | Maps stored type names to CLR event types for deserialization. |
-| `EventDbContext` / `SnapshotDbContext` | `EventStore` | The EF Core stores behind the store. You rarely need them directly (see [Low-level stores](#low-level-stores)). |
+| `EventTypesRegistry` | `Serialization` | Maps stored type names to CLR event types for deserialization. |
+| `EventDbContext` / `SnapshotDbContext` | (root) | The EF Core stores behind the store. You rarely need them directly (see [Low-level stores](#low-level-stores)). |
 
 ### Versioning
 
 - A new entity starts at `Version = 1`.
-- `RaiseEvent(event)` increments `Version`, records the event as uncommitted and applies it via `ProcessEvent`.
+- `RaiseEvent(event)` increments `Version`, records the event as uncommitted and applies it via `ProcessEvent`. If `ProcessEvent` throws, the version and the uncommitted list are rolled back.
 - Create events with the current `Version` as `EventId` *before* calling `RaiseEvent` (the first event has `EventId = 1`).
 - `Rehydrate(ImmutableArray<IEvent> stream)` replays stored events (setting `Version` to each `EventId`) and then increments `Version`, so the next event gets the next id. The store calls it for you.
 - `CommitEvents()` clears the uncommitted list; `EventStore.SaveAsync` calls it after a successful save.
@@ -110,6 +110,81 @@ public sealed class CustomerService(EventStore store)
 }
 ```
 
+## Recommended entity design
+
+The `Customer` above is the minimum. For a real aggregate, this is the shape that works best with the library:
+
+```csharp
+public sealed record OrderPlaced(long EventId, string CustomerId) : IEvent;
+public sealed record ItemAdded(long EventId, string Sku, int Quantity) : IEvent;
+public sealed record OrderShipped(long EventId) : IEvent;
+
+public sealed record OrderItem(string Sku, int Quantity);
+
+public sealed class Order : EventSourcedEntity, ISnapshot
+{
+    private readonly List<OrderItem> _items = [];
+
+    private Order() { } // used only by the EventStore
+
+    public static Order Place(string customerId)
+    {
+        if (string.IsNullOrWhiteSpace(customerId))
+            throw new ArgumentException("Customer is required.", nameof(customerId));
+
+        var order = new Order();
+        order.RaiseEvent(new OrderPlaced(order.Version, customerId));
+        return order;
+    }
+
+    public string CustomerId { get; private set; } = "";
+    public bool Shipped { get; private set; }
+    public IReadOnlyList<OrderItem> Items => _items;
+    public long EntityVersion => Version - 1;
+
+    public void AddItem(string sku, int quantity)
+    {
+        if (Shipped) throw new InvalidOperationException("Order already shipped.");
+        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+
+        RaiseEvent(new ItemAdded(Version, sku, quantity));
+    }
+
+    public void Ship()
+    {
+        if (Shipped) return; // idempotent
+        if (_items.Count == 0) throw new InvalidOperationException("Order has no items.");
+
+        RaiseEvent(new OrderShipped(Version));
+    }
+
+    public bool ShouldTakeSnapshot() => EntityVersion % 50 == 0; // every 50 events
+
+    // Only applies state: no validation, no exceptions, no side effects.
+    protected override void ProcessEvent(IEvent @event)
+    {
+        switch (@event)
+        {
+            case OrderPlaced e: CustomerId = e.CustomerId; break;
+            case ItemAdded e: _items.Add(new(e.Sku, e.Quantity)); break;
+            case OrderShipped: Shipped = true; break;
+        }
+    }
+}
+```
+
+Why this design:
+
+- **State changes only through events.** Setters are private and the collection is exposed read-only, so nothing can change state without `RaiseEvent`. A change made any other way would not be stored and would be lost on the next load by replay.
+- **A private constructor plus a static factory.** The store builds the entity through the private parameterless constructor and replays events into it. `Place` is the only way to create a new one, and it raises the first event, so a new order can never exist in an invalid state. A public constructor with parameters would still need the parameterless one, and the two could drift apart.
+- **Validation in commands, never in `ProcessEvent`.** `ProcessEvent` also runs when events are replayed from the store. Events are facts that already happened, so a rule that is stricter today must not make old streams unloadable.
+- **`EventId` is `Version`, read before `RaiseEvent`.** This keeps ids sequential and lets the database reject two writers appending the same event id (optimistic concurrency).
+- **Immutable event records.** They serialize cleanly and cannot be altered after being raised.
+- **`EntityVersion` is derived from `Version`.** It cannot get out of sync with the entity, and `SaveAsync` rejects a snapshot whose `EntityVersion` is not the last applied event.
+- **Snapshots keep the encapsulation.** Snapshots are written from the entity fields, so private setters, `readonly` fields and a private constructor all survive a restore. See [Snapshots](#snapshots).
+- **`ShouldTakeSnapshot()` is a cheap rule on the entity.** `SaveAsync` applies it for you after each save.
+- **Idempotent commands (`Ship`).** Repeating a command that already took effect raises no new event, so retries do not pollute the stream.
+
 ## Store API (`EventStore`)
 
 | Method | Description |
@@ -132,9 +207,9 @@ Snapshots avoid replaying long streams. With `LoadFromSnapshotAsync<T>`, the ent
 public sealed class Customer : EventSourcedEntity, ISnapshot
 {
     // Last applied event. It is serialized with the snapshot, and its setter restores Version on load.
-    public int EntityVersion
+    public long EntityVersion
     {
-        get => (int)Version - 1;
+        get => Version - 1;
         set => Version = value + 1;
     }
 
@@ -146,9 +221,9 @@ public sealed class Customer : EventSourcedEntity, ISnapshot
 }
 ```
 
-The snapshot is stored as JSON by `SnapshotDbContext`, so the entity needs a public parameterless constructor and settable state.
+The snapshot is stored as JSON by `SnapshotDbContext`. Entities are serialized by their instance fields, so they keep their state encapsulated: no public setters are needed, and the parameterless constructor can be private. Private and `readonly` fields are saved and restored; auto-property backing fields are stored under the property name. Mark a property `[JsonIgnore]` (or a field `[NonSerialized]`) to leave its state out. `Version` is restored from the snapshot, so `EntityVersion` can be a computed, get-only property (`Version - 1`) and the `set` in the example above is optional. Setter logic is not run on restore, only fields are assigned. Each field is written and read using its declared type, so a field typed as an interface or base class (other than collection interfaces such as `IReadOnlyList<T>`) cannot keep its concrete type: declare the concrete type.
 
-`SaveAsync` takes snapshots for you: after the events are saved, if the entity implements `ISnapshot` and `ShouldTakeSnapshot()` returns true, it persists the entity itself, replacing the stored snapshot under the stream id. `EntityVersion` must equal the last applied event (`Version - 1`); otherwise `SaveAsync` throws `InvalidOperationException` after saving the events, because a wrong value would make loads skip or repeat an event. The snapshot is taken after `CommitEvents()`, so no uncommitted events are serialized with it. The events and the snapshot are separate writes: if the snapshot fails, the events are already stored and the next load just replays from the previous snapshot.
+`SaveAsync` takes snapshots for you: after the events are saved, if the entity implements `ISnapshot` and `ShouldTakeSnapshot()` returns true, it persists the entity itself, replacing the stored snapshot under the stream id. `EntityVersion` must equal the last applied event (`Version - 1`); otherwise `SaveAsync` throws `InvalidOperationException` before saving anything, because a wrong value would make loads skip or repeat an event. The snapshot is taken after `CommitEvents()`, so no uncommitted events are serialized with it. The events and the snapshot are separate writes: if the snapshot fails, the events are already stored and the next load just replays from the previous snapshot.
 
 ```csharp
 await store.SaveAsync(streamId, customer); // snapshots automatically when ShouldTakeSnapshot() is true

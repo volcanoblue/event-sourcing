@@ -13,7 +13,7 @@
     /// </remarks>
     public interface ISnapshot
     {
-        int EntityVersion { get; }
+        long EntityVersion { get; }
 
         bool ShouldTakeSnapshot() => false;
     }

@@ -32,24 +32,32 @@ namespace VolcanoBlue.EventSourcing
         public async Task UpsertAsync<T>(string entityId, T snapshot, CancellationToken ct = default) 
             where T : ISnapshot
         {
-            // Snapshots saved earlier by this same context instance are still tracked: reuse those entries
-            // instead of attaching a second instance with the same key.
-            var tracked = ChangeTracker.Entries<Snapshot>()
-                                       .Where(e => e.Entity.EntityId == entityId)
-                                       .ToList();
-            foreach (var entry in tracked)
-                entry.State = entry.State == EntityState.Added ? EntityState.Detached : EntityState.Deleted;
+            // Snapshots saved earlier by this same context instance are still tracked; detach them so the
+            // database rows read below can be attached without an identity conflict.
+            foreach (var entry in ChangeTracker.Entries<Snapshot>().Where(e => e.Entity.EntityId == entityId).ToList())
+                entry.State = EntityState.Detached;
 
+            var replacement = SnapshotSerializer.Serialize(entityId, snapshot);
             var stored = await Snapshots.AsNoTracking()
                                         .Where(s => s.EntityId == entityId)
                                         .ToListAsync(ct);
+
+            var replaced = false;
             foreach (var row in stored)
             {
-                if (!tracked.Exists(e => e.Entity.EntityVersion == row.EntityVersion))
+                if (row.EntityVersion == replacement.EntityVersion)
+                {
+                    Update(replacement); // same key: overwrite in place instead of delete + insert
+                    replaced = true;
+                }
+                else
+                {
                     Remove(row);
+                }
             }
 
-            await Snapshots.AddAsync(SnapshotSerializer.Serialize(entityId, snapshot), ct);
+            if (!replaced)
+                await Snapshots.AddAsync(replacement, ct);
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)

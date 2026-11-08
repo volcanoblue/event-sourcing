@@ -18,13 +18,23 @@ namespace VolcanoBlue.EventSourcing.Abstractions
         protected EventSourcedEntity() =>
             UncommittedEvents = _uncommittedEvents.AsReadOnly();
 
-        public IReadOnlyCollection<IEvent> UncommittedEvents { get; }
+        public IReadOnlyList<IEvent> UncommittedEvents { get; }
 
         protected void RaiseEvent<TEvent>(TEvent @event) where TEvent : IEvent
         {
             Version++;
             _uncommittedEvents.Add(@event);
-            ProcessEvent(@event);
+            try
+            {
+                ProcessEvent(@event);
+            }
+            catch
+            {
+                // A rejected event must not stay queued nor consume a version.
+                _uncommittedEvents.RemoveAt(_uncommittedEvents.Count - 1);
+                Version--;
+                throw;
+            }
         }
 
         public void Rehydrate(ImmutableArray<IEvent> stream)
@@ -48,6 +58,8 @@ namespace VolcanoBlue.EventSourcing.Abstractions
             Version = snapshotVersion;
             Rehydrate(stream);
         }
+
+        internal void RestoreVersion(long version) => Version = version;
 
         protected abstract void ProcessEvent(IEvent @event);
 
