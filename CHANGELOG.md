@@ -1,0 +1,53 @@
+# Changelog
+
+All notable changes to `VolcanoBlue.EventSourcing` are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
+
+Entries are derived from the git history and the `PackageVersion` in `src/VolcanoBlue.EventSourcing.csproj`.
+Version 1.0.1 has no recorded changes in the repository.
+
+## [1.0.2] - 2026-11-08
+
+### Added
+- `EventDbContext` declares an index on `(StreamId, Id)` to serve stream reads.
+- README "Performance tips" section and this changelog.
+
+### Changed
+- `EventDbContext` reads use a single async `ToListAsync` query instead of a count followed by a blocking enumeration.
+- `EventDbContext` disables automatic change detection, and `SaveStreamAsync` clears the change tracker after saving so reused contexts do not accumulate appended events.
+- `EventTypesRegistry.Initialize` is thread-safe (double-checked lock and `TryAdd`).
+- `PrivateConstructorConverter` deserializes constructor arguments directly from the `JsonElement` (no `GetRawText()` re-parse) and uses a plain array instead of `ArrayPool`.
+
+### Removed
+- Unused `EventSerializer.TypesCache`.
+
+## [1.0.0] - 2026-11-07
+
+Commits `f71d952`, `0e4248a`, `f5467d1`.
+
+### Added
+- Legacy (database-first) support: `Event` and `Snapshot` are public, and `EventDbContext` / `SnapshotDbContext` accept an optional model configuration callback (`EventModelConfiguration` / `SnapshotModelConfiguration`, resolved from DI) to map existing tables and columns.
+- `services.AddEventSourcing()` extension and the `VolcanoBlue.EventSourcing.Extensions` namespace.
+- `DatabaseFirstTests` covering mapped event and snapshot tables on `DatabaseFirst.db`.
+- Full README documentation (concepts, quick start, API, snapshots, legacy mapping).
+
+### Changed
+- **Breaking:** `EventDbContext.ReadStream*Async` return `ImmutableArray<IEvent>`, `SaveStreamAsync` returns `int`, and failures are thrown as exceptions (e.g. `DbUpdateException` on a duplicate `EventId`) instead of `Result<T, IError>`.
+- **Breaking:** `SnapshotDbContext.ByIdAsync<T>` returns `Option<T>` (`None` when missing).
+- **Breaking:** `EventTypeRegistry` renamed to `EventTypesRegistry`.
+- Tests updated to the new API.
+
+### Removed
+- **Breaking:** `IError`, `ExceptionalError` and `SnapshotNotFoundError`.
+- Unused `Newtonsoft.Json` package reference (serialization already used `System.Text.Json`).
+
+## [0.0.1] - 2026-11-07
+
+Commits `1218ef3`, `b0d63f5`.
+
+### Added
+- Initial release: `IEvent`, `EventSourcedEntity`, `ISnapshot`, `ISnapshotable<T>`.
+- `EventDbContext` and `SnapshotDbContext` (EF Core) with JSON serialization, `EventTypeRegistry` and `PrivateConstructorConverter`.
+- NuGet packaging metadata and icon.
+- xUnit tests with in-memory SQLite: event store, snapshot store, snapshots combined with events, and an event-sourced entity.
+- GitHub Actions workflow to build, test and publish on `v*` tags.

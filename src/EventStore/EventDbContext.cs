@@ -19,9 +19,19 @@ namespace VolcanoBlue.EventSourcing.EventStore
     /// Supports reading full streams or from a specific event version for incremental updates.
     /// Returns immutable arrays to prevent accidental modifications to event history.
     /// </summary>
-    public sealed class EventDbContext(DbContextOptions<EventDbContext> options,
-                                       EventModelConfiguration? modelConfigAction = null) : DbContext(options)
+    public sealed class EventDbContext : DbContext
     {
+        private readonly EventModelConfiguration? _modelConfigAction;
+
+        public EventDbContext(DbContextOptions<EventDbContext> options,
+                              EventModelConfiguration? modelConfigAction = null) : base(options)
+        {
+            _modelConfigAction = modelConfigAction;
+
+            // Events are only ever added, so scanning tracked entities for changes is wasted work.
+            ChangeTracker.AutoDetectChangesEnabled = false;
+        }
+
         private DbSet<Event> Events { get; set; }
 
         public async Task<ImmutableArray<IEvent>> ReadStreamAsync(string streamId, 
@@ -73,9 +83,11 @@ namespace VolcanoBlue.EventSourcing.EventStore
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Event>().HasKey(e => new { e.Id, e.StreamId });
+            // Reads filter by stream first and order by id; the primary key alone can't serve that.
+            modelBuilder.Entity<Event>().HasIndex(e => new { e.StreamId, e.Id });
             base.OnModelCreating(modelBuilder);
 
-            modelConfigAction?.Invoke(modelBuilder);
+            _modelConfigAction?.Invoke(modelBuilder);
         }
     }
 }

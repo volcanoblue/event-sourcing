@@ -1,5 +1,6 @@
 <Solution>
     <Folder Name="/Resources/">
+        <File Path="CHANGELOG.md" />
         <File Path="icon.png" />
         <File Path="LICENSE" />
         <File Path="README.md" />

@@ -17,7 +17,7 @@
     <PackageIcon>Resources\icon.png</PackageIcon>
     <PackageTags>event sourcing;event-sourcing;events;cqrs;charp-library</PackageTags>
     <PackageReadmeFile>Resources\README.md</PackageReadmeFile>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>1.0.2</PackageVersion>
     <Company>Volcano Blue</Company>
   </PropertyGroup>
 

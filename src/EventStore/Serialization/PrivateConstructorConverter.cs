@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Linq.Expressions;
@@ -148,12 +147,9 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
                 using var doc = JsonDocument.ParseValue(ref reader);
                 var root = doc.RootElement;
 
-                // Rent array from pool for parameter values - handle any size
-                var parameterValues = ParameterCount <= 256
-                    ? ArrayPool<object?>.Shared.Rent(ParameterCount)
-                    : new object?[ParameterCount]; // Fallback for extremely large parameter lists
+                // Constructor arguments are small, so a plain array is cheaper than renting from a pool
+                var parameterValues = new object?[ParameterCount];
 
-                try
                 {
                     // Match JSON properties to constructor parameters
                     for (int i = 0; i < ParameterCount; i++)
@@ -165,7 +161,7 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
                         if (root.TryGetProperty(mapping.LowerCase, out var jsonValue) ||
                             root.TryGetProperty(mapping.UpperCase, out jsonValue))
                         {
-                            parameterValues[i] = JsonSerializer.Deserialize(jsonValue.GetRawText(), param.ParameterType, options);
+                            parameterValues[i] = jsonValue.Deserialize(param.ParameterType, options);
                         }
                         else
                         {
@@ -178,14 +174,6 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
 
                     // Invoke compiled constructor delegate
                     return CompiledConstructor(parameterValues);
-                }
-                finally
-                {
-                    // Return array to pool only if it was rented
-                    if (ParameterCount <= 256)
-                    {
-                        ArrayPool<object?>.Shared.Return(parameterValues, clearArray: true);
-                    }
                 }
             }
 

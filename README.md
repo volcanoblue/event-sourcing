@@ -257,6 +257,19 @@ Notes:
 - Existing rows must hold the full type name of the event in the type column and JSON in the data column, as written by this library.
 - EF caches the model per context type, so use a single mapping per application. A working example is in `test/DatabaseFirstTests.cs`.
 
+## Performance tips
+
+Built in: reads use `AsNoTracking`, a single async query per read, a `(StreamId, Id)` index, and change detection is disabled on `EventDbContext`.
+
+Recommended in your application:
+
+- **Use snapshots** for long streams: load the snapshot, then `ReadStreamFromEventIdAsync` from its `EntityVersion`. Take one every N events (see `ISnapshotable<T>`).
+- **Batch appends:** append all events of an aggregate in one `AppendToStreamAsync` and one `SaveStreamAsync` call (one round trip).
+- **Legacy schemas:** create an index on `(stream column, id column)` yourself, as the library doesn't create it for you.
+- **Pooling:** `AddDbContextPool<EventDbContext>` reduces allocations; the contexts hold no per-request state.
+- **Database tuning:** keep connection pooling on, use WAL for SQLite, and consider native `datetime`/`jsonb` columns when you own the schema.
+- **Caching:** keep hot aggregates in a short-lived cache and apply only events newer than the cached `Version`.
+
 ## Project layout
 
 ```
