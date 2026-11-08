@@ -12,7 +12,7 @@
     <Description>Event sourcing library with Models and EF Core.</Description>
     <PackageLicenseExpression>Unlicense</PackageLicenseExpression>
     <PackageProjectUrl>https://volcano.blue</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/volcano-blue/event-sourcing</RepositoryUrl>
+    <RepositoryUrl>https://github.com/volcanoblue/event-sourcing</RepositoryUrl>
     <Copyright>2026 Volcano Blue</Copyright>
     <PackageIcon>Resources\icon.png</PackageIcon>
     <PackageTags>event sourcing;event-sourcing;events;cqrs;csharp-library</PackageTags>
