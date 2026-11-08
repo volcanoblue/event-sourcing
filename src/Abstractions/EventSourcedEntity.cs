@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Collections.Immutable;
 
 namespace VolcanoBlue.EventSourcing.Abstractions
 {
@@ -13,8 +14,11 @@ namespace VolcanoBlue.EventSourcing.Abstractions
     {
         public long Version { get; protected set; } = 1;
         private readonly List<IEvent> _uncommittedEvents = [];
-        
-        public IReadOnlyCollection<IEvent> UncommittedEvents => _uncommittedEvents.AsReadOnly();
+
+        protected EventSourcedEntity() =>
+            UncommittedEvents = _uncommittedEvents.AsReadOnly();
+
+        public IReadOnlyCollection<IEvent> UncommittedEvents { get; }
 
         protected void RaiseEvent<TEvent>(TEvent @event) where TEvent : IEvent
         {
@@ -23,15 +27,26 @@ namespace VolcanoBlue.EventSourcing.Abstractions
             ProcessEvent(@event);
         }
 
-        protected void Rehydrate(IEnumerable<IEvent> stream)
+        public void Rehydrate(ImmutableArray<IEvent> stream)
         {
-            foreach (var @event in stream)
+            for (var i = 0; i < stream.Length; i++)
             {
+                var @event = stream[i];
                 Version = @event.EventId;
                 ProcessEvent(@event);
             }
 
             Version++;
+        }
+
+        /// <summary>
+        /// Continues from a snapshot: sets <c>Version</c> to the snapshot version and replays the later events.
+        /// Without later events <c>Version</c> ends at <paramref name="snapshotVersion"/> + 1.
+        /// </summary>
+        internal void RehydrateFromSnapshot(long snapshotVersion, ImmutableArray<IEvent> stream)
+        {
+            Version = snapshotVersion;
+            Rehydrate(stream);
         }
 
         protected abstract void ProcessEvent(IEvent @event);

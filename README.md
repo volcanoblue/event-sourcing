@@ -24,6 +24,7 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 | `ISnapshotable<T>` | `Abstractions` | Optional contract for entities that decide when and how to create a snapshot. |
 | `EventDbContext` | `EventStore` | Append-only event store (read streams, append, save). |
 | `SnapshotDbContext` | `EventStore` | Snapshot store (get by id, upsert). |
+| `EntityRepository` | `EventStore` | `LoadAsync`, `LoadFromSnapshotAsync` and `SaveAsync` for entities, on top of both contexts. |
 | `EventTypesRegistry` | `EventStore.Serialization` | Maps stored type names to CLR event types for deserialization. |
 
 ### Versioning
@@ -31,7 +32,7 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 - A new entity starts at `Version = 1`.
 - `RaiseEvent(event)` increments `Version`, records the event as uncommitted and applies it via `ProcessEvent`.
 - Create events with the current `Version` as `EventId` *before* calling `RaiseEvent` (the first event has `EventId = 1`).
-- `Rehydrate(stream)` replays stored events (setting `Version` to each `EventId`) and then increments `Version`, so the next event gets the next id. Don't call it with an empty stream, as it would still bump the version.
+- `Rehydrate(ImmutableArray<IEvent> stream)` is public and replays stored events (setting `Version` to each `EventId`) and then increments `Version`, so the next event gets the next id. Don't call it with an empty stream, as it would still bump the version.
 - `CommitEvents()` clears the uncommitted list after a successful save.
 
 ## Quick start
@@ -86,7 +87,7 @@ public sealed class Customer : EventSourcedEntity
 
 ### 3. Register event types and the stores
 
-Event types are resolved by full name when reading. Call `EventTypesRegistry.Initialize` once at startup with every assembly containing events (later calls are ignored).
+Event types are resolved by full name when reading. Call `EventTypesRegistry.Initialize` once at startup with every assembly containing events (each assembly is scanned once; later calls with new assemblies add their events). With DI, `services.AddEventSourcing(typeof(NameChanged).Assembly)` does the same and registers `EntityRepository` (scoped); without arguments it uses the calling assembly.
 
 ```csharp
 EventTypesRegistry.Initialize(typeof(NameChanged).Assembly);
@@ -153,6 +154,8 @@ var tail = await events.ReadStreamFromEventIdAsync("Customer-42", state.EntityVe
 ```
 
 Implement `ISnapshotable<TSnapshot>` (`ShouldTakeSnapshot()` / `TakeSnapshot()`) on an entity to encapsulate when and how snapshots are taken.
+
+`EntityRepository.LoadFromSnapshotAsync<T>(streamId)` expects `T` to be its own snapshot (`T : EventSourcedEntity, ISnapshot`, deserialized by `SnapshotDbContext`, so it needs a public parameterless constructor and settable state). It replays only the events after `EntityVersion`; without a snapshot it replays the whole stream.
 
 ## Serialization
 

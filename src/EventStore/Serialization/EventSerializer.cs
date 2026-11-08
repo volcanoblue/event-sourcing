@@ -17,15 +17,26 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
             Converters = { new PrivateConstructorConverter() }
         };
 
-        public static Event Serialize(string streamId, IEvent @event)
+        // Separate from Options: PrivateConstructorConverter.Write re-enters the serializer with the same options.
+        private static readonly JsonSerializerOptions WriteOptions = new()
+        {
+            IncludeFields = true
+        };
+
+        public static Event Serialize(string streamId, IEvent @event) =>
+            Serialize(streamId, @event, Timestamp());
+
+        public static string Timestamp() => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+
+        public static Event Serialize(string streamId, IEvent @event, string occurredAt)
         {
             var type = @event.GetType();
 
             Event serialized = new(@event.EventId,
                                    streamId,
-                                   DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+                                   occurredAt,
                                    type.FullName!,
-                                   JsonSerializer.Serialize(@event, type));
+                                   JsonSerializer.Serialize(@event, type, WriteOptions));
 
             return serialized;
         }

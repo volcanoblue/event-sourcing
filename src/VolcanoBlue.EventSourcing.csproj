@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
 
     <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
-    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">True</GeneratePackageOnBuild>
     <Title>$(AssemblyName)</Title>
     <Authors>William Santos</Authors>
     <PackageId>VolcanoBlue.EventSourcing</PackageId>
@@ -15,19 +15,15 @@
     <RepositoryUrl>https://github.com/volcano-blue/event-sourcing</RepositoryUrl>
     <Copyright>2026 Volcano Blue</Copyright>
     <PackageIcon>Resources\icon.png</PackageIcon>
-    <PackageTags>event sourcing;event-sourcing;events;cqrs;charp-library</PackageTags>
+    <PackageTags>event sourcing;event-sourcing;events;cqrs;csharp-library</PackageTags>
     <PackageReadmeFile>Resources\README.md</PackageReadmeFile>
-    <PackageVersion>1.0.2</PackageVersion>
+    <PackageVersion>2.0.0</PackageVersion>
     <Company>Volcano Blue</Company>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
     <PackageReference Include="Moonad" Version="5.5.5" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Tests\**" />
   </ItemGroup>
 
   <ItemGroup>

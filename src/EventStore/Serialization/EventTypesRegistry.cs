@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using VolcanoBlue.EventSourcing.Abstractions;
@@ -15,26 +16,36 @@ namespace VolcanoBlue.EventSourcing.EventStore.Serialization
     {
         private static readonly ConcurrentDictionary<string, Type> _types = [];
         private static readonly object InitLock = new();
-        private static volatile bool _isInitialized;
+        private static readonly HashSet<Assembly> Scanned = [];
 
+        /// <summary>Scans each assembly once; calling it again with new assemblies adds their events.</summary>
         public static void Initialize(params Assembly[] assemblies)
         {
-            if (_isInitialized)
-                return;
-
             lock (InitLock)
             {
-                if (_isInitialized)
-                    return;
+                foreach (var assembly in assemblies)
+                {
+                    if (!Scanned.Add(assembly))
+                        continue;
 
-                var eventTypes = assemblies
-                    .SelectMany(a => a.GetTypes())
-                    .Where(t => typeof(IEvent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
+                    var eventTypes = LoadableTypes(assembly)
+                        .Where(t => typeof(IEvent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
 
-                foreach (var type in eventTypes)
-                    _types.TryAdd(type.FullName!, type);
+                    foreach (var type in eventTypes)
+                        _types.TryAdd(type.FullName!, type);
+                }
+            }
+        }
 
-                _isInitialized = true;
+        private static Type[] LoadableTypes(Assembly assembly)
+        {
+            try
+            {
+                return assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                return ex.Types.Where(t => t is not null).ToArray()!;
             }
         }
 

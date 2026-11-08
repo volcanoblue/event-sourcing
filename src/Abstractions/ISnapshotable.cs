@@ -1,6 +1,6 @@
 ﻿namespace VolcanoBlue.EventSourcing.Abstractions
 {
-    public interface ISnapshotable<T>
+    public interface ISnapshotable<out T>
     {
         bool ShouldTakeSnapshot();
 

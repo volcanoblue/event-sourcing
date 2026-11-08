@@ -3,8 +3,20 @@
 All notable changes to `VolcanoBlue.EventSourcing` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-Entries are derived from the git history and the `PackageVersion` in `src/VolcanoBlue.EventSourcing.csproj`.
-Version 1.0.1 has no recorded changes in the repository.
+## [2.0.0] - 2026-11-08
+
+### Added
+- `EntityRepository` (`LoadAsync`, `LoadFromSnapshotAsync`, `SaveAsync`) with per-type compiled entity factories; registered by `AddEventSourcing`.
+- `AddEventSourcing(params Assembly[])` registers events from the given assemblies (the calling assembly by default).
+
+### Changed
+- **Breaking:** `EventSourcedEntity.Rehydrate` is public and takes `ImmutableArray<IEvent>`; `ISnapshotable<out T>` is covariant; `SnapshotDbContext.ByIdAsync` takes `entityId`.
+- `EventTypesRegistry.Initialize` scans each assembly once instead of ignoring every call after the first, and tolerates types that fail to load.
+- `EventSerializer` writes with `IncludeFields`, matching reading.
+- `SnapshotDbContext.ByIdAsync` returns the highest snapshot version.
+
+### Fixed
+- Entities restored from a snapshot with no later events end at `EntityVersion + 1`.
 
 ## [1.0.2] - 2026-11-08
 

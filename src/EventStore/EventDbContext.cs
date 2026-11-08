@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
-using Moonad;
 using VolcanoBlue.EventSourcing.Abstractions;
 using VolcanoBlue.EventSourcing.EventStore.Serialization;
 
@@ -34,56 +33,56 @@ namespace VolcanoBlue.EventSourcing.EventStore
 
         private DbSet<Event> Events { get; set; }
 
-        public async Task<ImmutableArray<IEvent>> ReadStreamAsync(string streamId, 
-                                                                                  CancellationToken ct = default)
-        {
-            var rows = await Events.AsNoTracking()
+        // Not EF.CompileAsyncQuery: compiled queries are bound to a single model, and the model here
+        // can differ per configuration callback (database-first mappings).
+        public Task<ImmutableArray<IEvent>> ReadStreamAsync(string streamId,
+            CancellationToken ct = default) =>
+            DeserializeAsync(Events.AsNoTracking()
                 .Where(e => e.StreamId == streamId)
                 .OrderBy(e => e.Id)
-                .ToListAsync(ct);
+                .AsAsyncEnumerable(), ct);
 
-            return Deserialize(rows);
-        }
-
-        public async Task<ImmutableArray<IEvent>> ReadStreamFromEventIdAsync(string streamId, long eventId, 
-                                                                                             CancellationToken ct = default)
-        {
-            var rows = await Events.AsNoTracking()
+        public Task<ImmutableArray<IEvent>> ReadStreamFromEventIdAsync(string streamId, long eventId,
+            CancellationToken ct = default) =>
+            DeserializeAsync(Events.AsNoTracking()
                 .Where(e => e.StreamId == streamId && e.Id > eventId)
                 .OrderBy(e => e.Id)
-                .ToListAsync(ct);
+                .AsAsyncEnumerable(), ct);
 
-            return Deserialize(rows);
-        }
-
-        public async Task AppendToStreamAsync(string streamId, IEnumerable<IEvent> events, CancellationToken ct = default)
+        public Task AppendToStreamAsync(string streamId, IEnumerable<IEvent> events, CancellationToken ct = default)
         {
-            var eventsToAppend = events.Select(e => EventSerializer.Serialize(streamId, e));
-            await Events.AddRangeAsync(eventsToAppend, ct);
+            ct.ThrowIfCancellationRequested();
+
+            // Nothing here is truly asynchronous (no async value generators), so add synchronously
+            // with a single timestamp for the whole batch.
+            var occurredAt = EventSerializer.Timestamp();
+            foreach (var @event in events)
+                Events.Add(EventSerializer.Serialize(streamId, @event, occurredAt));
+
+            return Task.CompletedTask;
         }
 
         public async Task<int> SaveStreamAsync(CancellationToken ct = default)
         {
             var saved = await SaveChangesAsync(ct);
-            ChangeTracker.Clear(); // appended rows are never read back through this context
+            ChangeTracker.Clear();
             return saved;
         }
 
-        private static ImmutableArray<IEvent> Deserialize(List<Event> rows)
+        // Streams rows straight into the result, without an intermediate list of rows.
+        private static async Task<ImmutableArray<IEvent>> DeserializeAsync(IAsyncEnumerable<Event> rows,
+            CancellationToken ct)
         {
-            if (rows.Count == 0)
-                return ImmutableArray<IEvent>.Empty;
-
-            var builder = ImmutableArray.CreateBuilder<IEvent>(rows.Count);
-            foreach (var row in rows)
+            var builder = ImmutableArray.CreateBuilder<IEvent>();
+            await foreach (var row in rows.WithCancellation(ct))
                 builder.Add(EventSerializer.Deserialize(row));
-            return builder.ToImmutable();
+
+            return builder.DrainToImmutable();
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Event>().HasKey(e => new { e.Id, e.StreamId });
-            // Reads filter by stream first and order by id; the primary key alone can't serve that.
             modelBuilder.Entity<Event>().HasIndex(e => new { e.StreamId, e.Id });
             base.OnModelCreating(modelBuilder);
 

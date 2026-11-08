@@ -1,8 +1,8 @@
 ﻿using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using Moonad;
 using VolcanoBlue.EventSourcing.Abstractions;
 using VolcanoBlue.EventSourcing.EventStore.Serialization;
@@ -14,12 +14,14 @@ namespace VolcanoBlue.EventSourcing.EventStore
     {
         private DbSet<Snapshot> Snapshots { get; set; }
 
-        public async Task<Option<TResult>> ByIdAsync<TResult>(string snapshotId, 
+        public async Task<Option<TResult>> ByIdAsync<TResult>(string entityId, 
             CancellationToken cancellationToken = default)
             where TResult : notnull, ISnapshot
         {
             var snapshot = (await Snapshots.AsNoTracking()
-                    .FirstOrDefaultAsync(e => e.EntityId == snapshotId, cancellationToken))
+                    .Where(e => e.EntityId == entityId)
+                    .OrderByDescending(e => e.EntityVersion)
+                    .FirstOrDefaultAsync(cancellationToken))
                     .ToOption();
             if (snapshot)
                 return SnapshotSerializer.Deserialize<TResult>(snapshot.Get());
