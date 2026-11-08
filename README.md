@@ -85,12 +85,17 @@ using VolcanoBlue.EventSourcing.Extensions;
 services.AddDbContext<EventStoreDbContext>(o => o.UseSqlite("Data Source=events.db"));
 
 // Registers EventSourcingOptions (singleton) and EventStore (scoped).
-// Events are registered one by one.
-services.AddEventSourcing(options => options.AddEvent<NameChanged>());
+// Simplest: scans the calling assembly for every IEvent, so no manual registration is needed.
+services.AddEventSourcing();
 
-// Or scan assemblies (the calling assembly when none is given).
+// Events in other assemblies:
 services.AddEventSourcing(typeof(NameChanged).Assembly);
+
+// Or register events one by one:
+services.AddEventSourcing(options => options.AddEvent<NameChanged>());
 ```
+
+Stored events identify their type by name, so every event type must be known when reading. Registration (scanning or `AddEvent`) happens at startup and is validated then: duplicate names fail on first use of the options, not when an entity happens to be loaded. The library does not guess the events of an entity, since events may live in another assembly.
 
 Without DI:
 
