@@ -6,11 +6,16 @@ namespace VolcanoBlue.EventSourcing.Tests;
 
 /// <summary>
 /// Entity that is its own snapshot (<see cref="ISnapshot"/>), so SnapshotDbContext can deserialize it directly.
-/// <see cref="EntityVersion"/> is the event version captured by <see cref="MarkSnapshot"/>.
+/// <see cref="EntityVersion"/> is derived from <see cref="EventSourcedEntity.Version"/> (the last applied event).
 /// </summary>
-public sealed class SnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotable<SnapshotEntity>
+public sealed class SnapshotEntity : EventSourcedEntity, ISnapshot
 {
-    public int EntityVersion { get; set; }
+    public int EntityVersion
+    {
+        get => (int)Version - 1;
+        set => Version = value + 1;
+    }
+
     public string State { get; set; } = "";
 
     [JsonIgnore]
@@ -21,15 +26,7 @@ public sealed class SnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotabl
 
     public void Rename(string name) => RaiseEvent(new TestEvent(Version, name));
 
-    public SnapshotEntity MarkSnapshot()
-    {
-        EntityVersion = (int)Version - 1;
-        return this;
-    }
-
     public bool ShouldTakeSnapshot() => AutoSnapshot;
-
-    public SnapshotEntity TakeSnapshot() => MarkSnapshot();
 
     protected override void ProcessEvent(IEvent @event)
     {
@@ -59,19 +56,13 @@ public sealed class FieldEvent : IEvent
 }
 
 /// <summary>Takes snapshots with an off-by-one EntityVersion (Version instead of Version - 1).</summary>
-public sealed class WrongVersionSnapshotEntity : EventSourcedEntity, ISnapshot, ISnapshotable<WrongVersionSnapshotEntity>
+public sealed class WrongVersionSnapshotEntity : EventSourcedEntity, ISnapshot
 {
-    public int EntityVersion { get; set; }
+    public int EntityVersion => (int)Version;
 
     public void Rename(string name) => RaiseEvent(new TestEvent(Version, name));
 
     public bool ShouldTakeSnapshot() => true;
-
-    public WrongVersionSnapshotEntity TakeSnapshot()
-    {
-        EntityVersion = (int)Version;
-        return this;
-    }
 
     protected override void ProcessEvent(IEvent @event) { }
 }

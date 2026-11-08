@@ -137,7 +137,7 @@ public class EventStoreTests : IDisposable
         var entity = Renamed(1, 10);
         await _store.SaveAsync(StreamId, entity);
 
-        await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
+        await _snapshots.UpsertAsync(StreamId, entity);
         await _snapshots.SaveChangesAsync();
 
         Renamed(11, 20, entity);
@@ -155,7 +155,7 @@ public class EventStoreTests : IDisposable
     {
         var entity = Renamed(1, 5);
         await _store.SaveAsync(StreamId, entity);
-        await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
+        await _snapshots.UpsertAsync(StreamId, entity);
         await _snapshots.SaveChangesAsync();
 
         var loaded = (await _store.LoadFromSnapshotAsync<SnapshotEntity>(StreamId)).Get();
@@ -318,7 +318,7 @@ public class EventStoreTests : IDisposable
     {
         var entity = Renamed(1, 5);
         await _store.SaveAsync(StreamId, entity);
-        await _snapshots.UpsertAsync(StreamId, entity.MarkSnapshot());
+        await _snapshots.UpsertAsync(StreamId, entity);
         await _snapshots.SaveChangesAsync();
         await _store.SaveAsync(StreamId, Renamed(6, 8, entity));
 

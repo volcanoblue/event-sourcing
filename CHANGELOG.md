@@ -3,6 +3,12 @@
 All notable changes to `VolcanoBlue.EventSourcing` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] - 2026-11-08
+
+### Changed
+- **Breaking:** `ISnapshotable<T>` was removed and merged into `ISnapshot`, which gains `ShouldTakeSnapshot()` (default `false`). The entity is its own snapshot, so `TakeSnapshot()` no longer exists.
+- `EventStore.SaveAsync` persists the entity as a snapshot when it implements `ISnapshot` and `ShouldTakeSnapshot()` returns true; it throws `InvalidOperationException` if `EntityVersion` is not the last applied event (`Version - 1`).
+
 ## [2.0.0] - 2026-11-08
 
 ### Added

@@ -50,9 +50,8 @@ namespace VolcanoBlue.EventSourcing
 
         /// <summary>
         /// Appends the uncommitted events to <paramref name="streamId"/>, saves them and marks them as committed.
-        /// When the entity implements <see cref="ISnapshotable{TSnapshot}"/> (with a reference-type snapshot) and
-        /// <c>ShouldTakeSnapshot()</c> returns true, a snapshot is taken and persisted under <paramref name="streamId"/>
-        /// after the events are saved. The two writes are separate: if the snapshot fails the events are already
+        /// When the entity implements <see cref="ISnapshot"/> and <c>ShouldTakeSnapshot()</c> returns true, the entity
+        /// itself is persisted as the snapshot under <paramref name="streamId"/> after the events are saved. The two writes are separate: if the snapshot fails the events are already
         /// stored, and the next load simply replays from the previous snapshot. The snapshot's <c>EntityVersion</c> must
         /// equal the entity's last applied event (<c>Version - 1</c>), otherwise <see cref="InvalidOperationException"/> is thrown.
         /// </summary>
@@ -66,10 +65,8 @@ namespace VolcanoBlue.EventSourcing
             await events.SaveStreamAsync(ct);
             entity.CommitEvents();
 
-            if (entity is ISnapshotable<ISnapshot> snapshotable && snapshotable.ShouldTakeSnapshot())
+            if (entity is ISnapshot snapshot && snapshot.ShouldTakeSnapshot())
             {
-                var snapshot = snapshotable.TakeSnapshot();
-
                 // EntityVersion must be the last applied event (Version - 1). Loading replays events with an id
                 // greater than it, so an off-by-one would silently skip or duplicate an event.
                 if (snapshot.EntityVersion != entity.Version - 1)

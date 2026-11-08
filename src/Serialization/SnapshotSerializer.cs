@@ -11,7 +11,7 @@ namespace VolcanoBlue.EventSourcing.Serialization
             return new(snapshotId,
                        snapshot.EntityVersion,
                        DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
-                       // Runtime type: T may be just ISnapshot (e.g. from a covariant ISnapshotable), which would drop all state.
+                       // Runtime type: T may be just ISnapshot (as when EventStore snapshots an entity), which would drop all state.
                        JsonSerializer.Serialize((object)snapshot, snapshot.GetType()));
         }
 
