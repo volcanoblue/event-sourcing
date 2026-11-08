@@ -27,32 +27,46 @@ internal static class EntityStateSerializer
     // (its Write re-enters the serializer with the same options).
     private static readonly JsonSerializerOptions ReadOptions = new()
     {
-        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        TypeInfoResolver = PrivateConstructorConverter.CreateResolver(),
         IncludeFields = true,
         PropertyNameCaseInsensitive = true,
         Converters = { new PrivateConstructorConverter() }
     };
 
-    private static readonly JsonSerializerOptions WriteOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver(), IncludeFields = true };
+    // Reused by every serialization on a thread: avoids allocating a buffer and a writer per snapshot.
+    private const int MaxReusableBuffer = 1 << 20;
 
-    public static bool Handles(Type type) => typeof(EventSourcedEntity).IsAssignableFrom(type);
+    [ThreadStatic] private static ArrayBufferWriter<byte>? Buffer;
+    [ThreadStatic] private static Utf8JsonWriter? Writer;
+
+    private static readonly JsonSerializerOptions WriteOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver(), IncludeFields = true };
 
     public static string Serialize(object entity)
     {
         var state = Cache.GetOrAdd(entity.GetType(), static t => new TypeState(t));
-        var buffer = new ArrayBufferWriter<byte>(256);
-        using (var writer = new Utf8JsonWriter(buffer))
+        var buffer = Buffer ??= new ArrayBufferWriter<byte>(256);
+        var writer = Writer ??= new Utf8JsonWriter(buffer);
+        buffer.ResetWrittenCount();
+        writer.Reset(buffer);
+
+        writer.WriteStartObject();
+        foreach (var field in state.Fields)
         {
-            writer.WriteStartObject();
-            foreach (var field in state.Fields)
-            {
-                writer.WritePropertyName(field.EncodedName);
-                JsonSerializer.Serialize(writer, field.Get(entity), field.WriteInfo ??= WriteOptions.GetTypeInfo(field.Type));
-            }
-            writer.WriteEndObject();
+            writer.WritePropertyName(field.EncodedName);
+            JsonSerializer.Serialize(writer, field.Get(entity), field.WriteInfo ??= WriteOptions.GetTypeInfo(field.Type));
+        }
+        writer.WriteEndObject();
+        writer.Flush();
+
+        var json = System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+        if (buffer.Capacity > MaxReusableBuffer)
+        {
+            // Do not keep a huge snapshot's buffer alive on this thread.
+            Buffer = null;
+            Writer = null;
         }
 
-        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+        return json;
     }
 
     public static T Deserialize<T>(string json, long entityVersion)
@@ -74,7 +88,7 @@ internal static class EntityStateSerializer
             if (field is null)
                 reader.Skip();
             else
-                field.Set(entity, JsonSerializer.Deserialize(ref reader, field.ReadInfo ??= ReadOptions.GetTypeInfo(field.Type)));
+                field.Set(entity, JsonScalars.Read(ref reader, field.Kind, field.ReadInfo ??= ReadOptions.GetTypeInfo(field.Type)));
         }
 
         ((EventSourcedEntity)entity).RestoreVersion(entityVersion);
@@ -87,6 +101,7 @@ internal static class EntityStateSerializer
     {
         public JsonEncodedText EncodedName { get; } = JsonEncodedText.Encode(Name);
         public byte[] Utf8Name { get; } = System.Text.Encoding.UTF8.GetBytes(Name);
+        public ScalarKind Kind { get; } = JsonScalars.KindOf(Type);
         public JsonTypeInfo? ReadInfo;
         public JsonTypeInfo? WriteInfo;
 
@@ -146,6 +161,7 @@ internal static class EntityStateSerializer
             Create = Expression.Lambda<Func<object>>(Expression.Convert(Expression.New(ctor), typeof(object))).Compile();
 
             var fields = new List<StateField>();
+            var used = new HashSet<string>(StringComparer.Ordinal);
             for (var t = type; t is not null && t != typeof(EventSourcedEntity); t = t.BaseType)
             {
                 foreach (var info in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
@@ -163,6 +179,13 @@ internal static class EntityStateSerializer
                     }
                     else if (info.GetCustomAttribute<JsonIgnoreAttribute>() is not null)
                         continue;
+
+                    // A base class may declare a field with the same name as a derived one: qualify it to keep both.
+                    if (!used.Add(name))
+                    {
+                        name = $"{t.Name}.{name}";
+                        used.Add(name);
+                    }
 
                     fields.Add(StateField.Create(name, info));
                 }

@@ -12,8 +12,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Changed
 - Computed properties (`Name => _name`) have no field, so they are never persisted and need no `[JsonIgnore]`. `[JsonIgnore]` is only for excluding an auto-property; `[NonSerialized]` for a field.
 
+### Fixed
+- An event whose only constructor is private and parameterless (state in fields or public setters) failed to read with "converter read too much or not enough"; it is now created through that constructor and filled like any other event.
+- Reading an event whose stored data is `null` throws `JsonException` instead of a `NullReferenceException`.
+- A snapshotted entity whose base class declares a field with the same name as a derived class no longer stores one over the other: the base field is stored as `BaseType.name`.
+- Malformed snapshot JSON (including a non-object) always surfaces as `JsonException`, so `LoadAsync` falls back to a full replay.
+
 ### Performance
-- Event constructor arguments and snapshot fields are read straight from `Utf8JsonReader` (no `JsonDocument`, no re-parsing of each value), and the `JsonTypeInfo` of each snapshot field is cached.
+- Event constructor arguments and snapshot fields are read straight from `Utf8JsonReader` (no `JsonDocument`), common scalar types (`string`, `int`, `long`, `bool`, `decimal`, `double`, `Guid`, `DateTime`, `DateTimeOffset`) skip the per-value serializer setup, and the `JsonTypeInfo` of each field and constructor parameter is cached. Measured against 4.0.0 (steady state, reflection mode): snapshot read about 25% faster, snapshot write about 20% faster, event read about 5% faster.
+- Snapshot serialization reuses a per-thread buffer and writer.
+- Replacing a snapshot reads only the keys of the stored rows (not their `Data`) and deletes stale rows by key.
 
 ## [4.0.0] - 2026-11-08
 

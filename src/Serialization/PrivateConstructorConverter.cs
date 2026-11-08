@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace VolcanoBlue.EventSourcing.Serialization
 {
@@ -18,6 +19,27 @@ namespace VolcanoBlue.EventSourcing.Serialization
     {
         private static readonly ConcurrentDictionary<Type, bool> CanConvertCache = [];
 
+        /// <summary>
+        /// Metadata resolver for reading. Types whose only constructors are parameterless and non-public cannot be
+        /// created by System.Text.Json; this lets it use that constructor and then fill the fields and properties as usual.
+        /// (Types with constructor parameters are handled by the converter.)
+        /// </summary>
+        public static IJsonTypeInfoResolver CreateResolver() =>
+            new DefaultJsonTypeInfoResolver { Modifiers = { UsePrivateParameterlessConstructor } };
+
+        private static void UsePrivateParameterlessConstructor(JsonTypeInfo info)
+        {
+            if (info.Kind != JsonTypeInfoKind.Object || info.CreateObject is not null || info.Type.IsAbstract)
+                return;
+
+            var constructors = info.Type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (constructors.Length == 0 || constructors.Any(c => c.GetParameters().Length > 0))
+                return;
+
+            var create = Expression.Lambda<Func<object>>(Expression.Convert(Expression.New(constructors[0]), typeof(object))).Compile();
+            info.CreateObject = create;
+        }
+
         public override bool CanConvert(Type typeToConvert)
         {
             return CanConvertCache.GetOrAdd(typeToConvert, static type =>
@@ -26,6 +48,10 @@ namespace VolcanoBlue.EventSourcing.Serialization
 
                 var hasPrivateConstructor = constructors.Any(c => !c.IsPublic);
                 if (!hasPrivateConstructor)
+                    return false;
+
+                // Only parameterless constructors: nothing to map, see CreateResolver.
+                if (constructors.All(c => c.GetParameters().Length == 0))
                     return false;
 
                 var publicConstructors = constructors.Where(c => c.IsPublic);
@@ -50,6 +76,8 @@ namespace VolcanoBlue.EventSourcing.Serialization
             private static readonly int ParameterCount;
             private static readonly object?[]? Defaults;
             private static readonly Dictionary<string, int>? IndexByName;
+            private static readonly byte[][]? ExactNames;
+            private static readonly ScalarKind[]? Kinds;
 
             static PrivateConstructorConverterInner()
             {
@@ -65,6 +93,8 @@ namespace VolcanoBlue.EventSourcing.Serialization
                     ParameterCount = Parameters.Length;
                     Defaults = new object?[ParameterCount];
                     IndexByName = new Dictionary<string, int>(ParameterCount, StringComparer.OrdinalIgnoreCase);
+                    ExactNames = new byte[ParameterCount * 2][];
+                    Kinds = new ScalarKind[ParameterCount];
 
                     for (int i = 0; i < ParameterCount; i++)
                     {
@@ -73,6 +103,12 @@ namespace VolcanoBlue.EventSourcing.Serialization
                             ? Parameters[i].DefaultValue
                             : GetDefaultValue(Parameters[i].ParameterType);
                         IndexByName.TryAdd(paramName, i);
+                        Kinds[i] = JsonScalars.KindOf(Parameters[i].ParameterType);
+
+                        // The two spellings the serializer itself writes: camelCase and PascalCase.
+                        ExactNames[2 * i] = System.Text.Encoding.UTF8.GetBytes(paramName);
+                        ExactNames[2 * i + 1] = System.Text.Encoding.UTF8.GetBytes(
+                            paramName.Length > 0 ? char.ToUpperInvariant(paramName[0]) + paramName[1..] : paramName);
                     }
 
                     // Compile expression tree for fast constructor invocation
@@ -84,17 +120,6 @@ namespace VolcanoBlue.EventSourcing.Serialization
             {
                 if (Constructor is null || Parameters is null)
                     throw new InvalidOperationException("Constructor not found");
-
-                // Handle parameterless constructor
-                if (Parameters.Length == 0)
-                {
-                    var constructorCall = Expression.New(Constructor);
-                    var lambda = Expression.Lambda<Func<object?[], T>>(
-                        constructorCall,
-                        Expression.Parameter(typeof(object?[]), "args")
-                    );
-                    return lambda.Compile();
-                }
 
                 // Create parameter: object?[] args
                 var argsParam = Expression.Parameter(typeof(object?[]), "args");
@@ -133,6 +158,9 @@ namespace VolcanoBlue.EventSourcing.Serialization
                 return lambda2.Compile();
             }
 
+            // One converter instance exists per options instance, so the metadata can be resolved once here.
+            private JsonTypeInfo[]? _parameterInfos;
+
             public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
             {
                 if (reader.TokenType == JsonTokenType.Null)
@@ -141,36 +169,47 @@ namespace VolcanoBlue.EventSourcing.Serialization
                 if (Constructor is null || Parameters is null || CompiledConstructor is null)
                     return default;
 
-                // Handle parameterless constructor
-                if (ParameterCount == 0)
-                {
-                    return CompiledConstructor([]);
-                }
-
                 if (reader.TokenType != JsonTokenType.StartObject)
                     throw new JsonException($"Expected a JSON object to build {typeof(T).Name}.");
 
                 // Defaults are pre-boxed once; properties found in the JSON overwrite them.
                 var parameterValues = (object?[])Defaults!.Clone();
+                var infos = _parameterInfos ??= Array.ConvertAll(Parameters, p => options.GetTypeInfo(p.ParameterType));
 
                 // Properties are read straight from the reader: no intermediate JsonDocument, no re-parsing.
+                // Properties are written in parameter order, so the next one is usually the next parameter.
+                var next = 0;
                 while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
                 {
-                    var index = IndexOf(ref reader);
+                    var index = IndexOf(ref reader, ref next);
                     reader.Read();
                     if (index < 0)
                         reader.Skip();
                     else
-                        parameterValues[index] = JsonSerializer.Deserialize(ref reader, Parameters[index].ParameterType, options);
+                        parameterValues[index] = JsonScalars.Read(ref reader, Kinds![index], infos[index]);
                 }
 
                 return CompiledConstructor(parameterValues);
             }
 
-            private static int IndexOf(ref Utf8JsonReader reader)
+            private static int IndexOf(ref Utf8JsonReader reader, ref int next)
             {
+                for (var n = 0; n < ParameterCount; n++)
+                {
+                    var i = next + n;
+                    if (i >= ParameterCount)
+                        i -= ParameterCount;
+
+                    if (reader.ValueTextEquals(ExactNames![2 * i]) || reader.ValueTextEquals(ExactNames[2 * i + 1]))
+                    {
+                        next = i + 1;
+                        return i;
+                    }
+                }
+
+                // Any other casing (or an unknown property).
                 var length = reader.HasValueSequence ? checked((int)reader.ValueSequence.Length) : reader.ValueSpan.Length;
-                Span<char> name = length <= 256 ? stackalloc char[256] : new char[length];
+                Span<char> name = length <= 128 ? stackalloc char[128] : new char[length];
                 var written = reader.CopyString(name);
                 return IndexByName!.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(name[..written], out var index) ? index : -1;
             }

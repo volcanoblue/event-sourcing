@@ -21,6 +21,7 @@ internal sealed class EventSerializer(EventTypeRegistry registry, JsonSerializer
     public IEvent Deserialize(Event row)
     {
         var type = registry.GetType(row.EventType);
-        return (IEvent)JsonSerializer.Deserialize(row.Data, type, readOptions)!;
+        return (IEvent?)JsonSerializer.Deserialize(row.Data, type, readOptions)
+               ?? throw new JsonException($"The event {row.Id} of '{row.StreamId}' has no data.");
     }
 }

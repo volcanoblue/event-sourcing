@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace VolcanoBlue.EventSourcing.Serialization;
 
@@ -17,12 +18,13 @@ internal sealed class SerializationRuntime
 
         var read = new JsonSerializerOptions
         {
+            TypeInfoResolver = PrivateConstructorConverter.CreateResolver(),
             IncludeFields = true,
             PropertyNameCaseInsensitive = true,
             Converters = { new PrivateConstructorConverter() }
         };
         // Separate from read: PrivateConstructorConverter.Write re-enters the serializer with the same options.
-        var write = new JsonSerializerOptions { IncludeFields = true };
+        var write = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver(), IncludeFields = true };
 
         Events = new EventSerializer(new EventTypeRegistry(eventTypes), read, write);
         Snapshots = new SnapshotSerializer();

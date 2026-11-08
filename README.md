@@ -32,7 +32,7 @@ You also need an EF Core provider for your database (SQL Server, SQLite, Postgre
 - `Version` is the id of the last applied event. A new entity starts at `Version = 0`.
 - `RaiseEvent(event)` increments `Version`, records the event as uncommitted and applies it via `ProcessEvent`.
 - Create events with `NextEventId` (`Version + 1`) as `EventId` *before* calling `RaiseEvent` (the first event has `EventId = 1`). `RaiseEvent` does not validate the id; `SaveAsync` does, throwing `InvalidOperationException` (nothing saved) when the pending events are not consecutive. A competing writer is reported as `ConcurrencyException`.
-- `Rehydrate(ImmutableArray<IEvent> stream)` replays stored events, setting `Version` to each `EventId`, so `Version` ends at the last event. The store calls it for you.
+- `Rehydrate(ImmutableArray<IEvent> stream)` replays stored events, setting `Version` to each `EventId`, so `Version` ends at the last event. Use it to rebuild an entity from events you already hold (for example in unit tests); `EventStore.LoadAsync` replays the stream itself.
 - `CommitEvents()` clears the uncommitted list; `EventStore.SaveAsync` calls it after a successful save.
 
 ## Quick start

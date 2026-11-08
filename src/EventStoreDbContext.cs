@@ -59,21 +59,23 @@ public sealed class EventStoreDbContext : DbContext
     /// </summary>
     internal async Task StageSnapshotAsync(Snapshot replacement, CancellationToken ct)
     {
-        var stored = await Snapshots.AsNoTracking()
+        // Only the keys are needed (a snapshot's Data can be large); stale rows are deleted by key.
+        var versions = await Snapshots.AsNoTracking()
             .Where(s => s.EntityId == replacement.EntityId)
+            .Select(s => s.EntityVersion)
             .ToListAsync(ct);
 
         var replaced = false;
-        foreach (var row in stored)
+        foreach (var version in versions)
         {
-            if (row.EntityVersion == replacement.EntityVersion)
+            if (version == replacement.EntityVersion)
             {
                 Update(replacement); // same key: overwrite instead of delete + insert
                 replaced = true;
             }
             else
             {
-                Remove(row);
+                Remove(new Snapshot(replacement.EntityId, version, string.Empty, string.Empty));
             }
         }
 
